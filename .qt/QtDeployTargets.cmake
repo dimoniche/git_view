@@ -1,0 +1,4 @@
+set(__QT_DEPLOY_TARGET_git_view_FILE /Users/dimoniche/work/git_view/src/git_view)
+set(__QT_DEPLOY_TARGET_git_view_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_test_log_parser_FILE /Users/dimoniche/work/git_view/tests/test_log_parser)
+set(__QT_DEPLOY_TARGET_test_log_parser_TYPE EXECUTABLE)

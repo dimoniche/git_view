@@ -1,0 +1,14 @@
+build/
+cmake-build-*/
+*.user
+*.autosave
+CMakeCache.txt
+CMakeFiles/
+Makefile
+compile_commands.json
+*.o
+*.a
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+.git_view_recent
