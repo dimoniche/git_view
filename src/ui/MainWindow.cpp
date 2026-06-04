@@ -3,6 +3,7 @@
 #include "core/WorkingTreeChange.h"
 #include "ui/CommitDetailsPanel.h"
 #include "ui/CommitHistoryView.h"
+#include "ui/RemotesDialog.h"
 #include "ui/WorkingChangesPanel.h"
 
 #include <QAction>
@@ -118,8 +119,12 @@ void MainWindow::setupUi()
         }
     });
 
+    auto *configureRemotesAction = new QAction(tr("Configure remotes…"), this);
+    connect(configureRemotesAction, &QAction::triggered, this, &MainWindow::configureRemotes);
+
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
     repoMenu->addAction(newBranchAction);
+    repoMenu->addAction(configureRemotesAction);
     repoMenu->addAction(m_publishBranchAction);
     repoMenu->addAction(m_commitAction);
     repoMenu->addSeparator();
@@ -173,6 +178,12 @@ void MainWindow::setupUi()
     m_mergeButton->setEnabled(false);
     connect(m_mergeButton, &QPushButton::clicked, this, &MainWindow::mergeSelectedBranch);
     branchLayout->addWidget(m_mergeButton);
+
+    m_remotesButton = new QPushButton(tr("Remotes…"), m_branchPanel);
+    m_remotesButton->setEnabled(false);
+    connect(m_remotesButton, &QPushButton::clicked, this, &MainWindow::configureRemotes);
+    branchLayout->addWidget(m_remotesButton);
+
     m_mainSplitter->addWidget(m_branchPanel);
 
     auto *historyColumn = new QWidget(m_mainSplitter);
@@ -432,6 +443,9 @@ void MainWindow::setRepository(const QString &path)
 
     m_createBranchButton->setEnabled(true);
     m_mergeButton->setEnabled(true);
+    if (m_remotesButton) {
+        m_remotesButton->setEnabled(true);
+    }
     m_loadMoreButton->setEnabled(true);
     updateWorkingTreeActions();
     updateBranchActions();
@@ -785,6 +799,20 @@ void MainWindow::updateBranchActions()
     }
 }
 
+void MainWindow::configureRemotes()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Remotes"), tr("Open a repository first."));
+        return;
+    }
+
+    RemotesDialog dialog(m_repo.path(), &m_git, this);
+    dialog.exec();
+    if (dialog.wasModified()) {
+        refreshRepository();
+    }
+}
+
 void MainWindow::publishOrPushSelectedBranch()
 {
     const Branch branch = branchForActions();
@@ -977,7 +1005,7 @@ QString MainWindow::pickRemoteForBranch(const Branch &branch, const QString &tit
     if (remoteList.isEmpty()) {
         QMessageBox::warning(
             this, title,
-            tr("No git remotes configured.\nAdd one with: git remote add <name> <url>"));
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
         return {};
     }
 
@@ -1094,7 +1122,7 @@ void MainWindow::pushBranch(const Branch &branch)
     if (remoteList.isEmpty()) {
         QMessageBox::warning(
             this, tr("Push branch"),
-            tr("No git remotes configured.\nAdd one with: git remote add <name> <url>"));
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
         return;
     }
 

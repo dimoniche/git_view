@@ -529,6 +529,136 @@ QString GitService::defaultRemote(const QString &repoPath) const
     return {};
 }
 
+std::vector<GitRemote> GitService::listRemotes(const QString &repoPath) const
+{
+    std::vector<GitRemote> list;
+    for (const QString &name : remotes(repoPath)) {
+        GitRemote remote;
+        remote.name = name;
+
+        const GitProcessResult fetchUrl =
+            m_runner.run(repoPath, {QStringLiteral("remote"), QStringLiteral("get-url"), name});
+        if (fetchUrl.success()) {
+            remote.fetchUrl = fetchUrl.stdoutText.trimmed();
+        }
+
+        const GitProcessResult pushUrl = m_runner.run(
+            repoPath, {QStringLiteral("remote"), QStringLiteral("get-url"), QStringLiteral("--push"),
+                       name});
+        if (pushUrl.success()) {
+            const QString push = pushUrl.stdoutText.trimmed();
+            if (!push.isEmpty() && push != remote.fetchUrl) {
+                remote.pushUrl = push;
+            }
+        }
+
+        list.push_back(std::move(remote));
+    }
+    return list;
+}
+
+QString GitService::validateRemoteName(const QString &name) const
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        return QStringLiteral("Remote name is empty");
+    }
+    if (trimmed.contains(QLatin1Char(' '))) {
+        return QStringLiteral("Remote name cannot contain spaces");
+    }
+    if (trimmed.contains(QLatin1String(".."))) {
+        return QStringLiteral("Remote name cannot contain \"..\"");
+    }
+    return {};
+}
+
+GitProcessResult GitService::addRemote(const QString &repoPath,
+                                       const QString &name,
+                                       const QString &url) const
+{
+    m_lastError.clear();
+
+    const QString validation = validateRemoteName(name);
+    if (!validation.isEmpty()) {
+        m_lastError = validation;
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const QString trimmedUrl = url.trimmed();
+    if (trimmedUrl.isEmpty()) {
+        m_lastError = QStringLiteral("Remote URL is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const QString trimmedName = name.trimmed();
+    if (remotes(repoPath).contains(trimmedName)) {
+        m_lastError = QStringLiteral("Remote \"%1\" already exists").arg(trimmedName);
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result = m_runner.run(
+        repoPath, {QStringLiteral("remote"), QStringLiteral("add"), trimmedName, trimmedUrl});
+    if (!result.success()) {
+        setError(QStringLiteral("git remote add failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::removeRemote(const QString &repoPath, const QString &name) const
+{
+    m_lastError.clear();
+
+    const QString trimmedName = name.trimmed();
+    if (trimmedName.isEmpty()) {
+        m_lastError = QStringLiteral("Remote name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("remote"), QStringLiteral("remove"), trimmedName});
+    if (!result.success()) {
+        setError(QStringLiteral("git remote remove failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::setRemoteUrl(const QString &repoPath,
+                                          const QString &name,
+                                          const QString &url,
+                                          bool push) const
+{
+    m_lastError.clear();
+
+    const QString trimmedName = name.trimmed();
+    const QString trimmedUrl = url.trimmed();
+    if (trimmedName.isEmpty() || trimmedUrl.isEmpty()) {
+        m_lastError = QStringLiteral("Remote name or URL is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    QStringList args{QStringLiteral("remote"), QStringLiteral("set-url")};
+    if (push) {
+        args << QStringLiteral("--push");
+    }
+    args << trimmedName << trimmedUrl;
+
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git remote set-url failed"), result);
+    }
+    return result;
+}
+
 GitProcessResult GitService::publishBranch(const QString &repoPath,
                                            const QString &branchName,
                                            const QString &remote) const

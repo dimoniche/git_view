@@ -2,6 +2,7 @@
 
 #include "core/Branch.h"
 #include "core/Commit.h"
+#include "core/GitRemote.h"
 #include "core/CommitDetails.h"
 #include "core/WorkingTreeChange.h"
 #include "git/GitProcessRunner.h"
@@ -55,7 +56,17 @@ public:
                                   bool isRemote,
                                   bool force = false) const;
     QStringList remotes(const QString &repoPath) const;
+    std::vector<GitRemote> listRemotes(const QString &repoPath) const;
     QString defaultRemote(const QString &repoPath) const;
+    QString validateRemoteName(const QString &name) const;
+    GitProcessResult addRemote(const QString &repoPath,
+                               const QString &name,
+                               const QString &url) const;
+    GitProcessResult removeRemote(const QString &repoPath, const QString &name) const;
+    GitProcessResult setRemoteUrl(const QString &repoPath,
+                                  const QString &name,
+                                  const QString &url,
+                                  bool push = false) const;
     GitProcessResult publishBranch(const QString &repoPath,
                                    const QString &branchName,
                                    const QString &remote) const;

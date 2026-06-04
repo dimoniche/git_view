@@ -50,6 +50,7 @@ private slots:
     void publishBranch(const Branch &branch);
     void pushBranch(const Branch &branch);
     void publishOrPushSelectedBranch();
+    void configureRemotes();
     void showBranchContextMenu(const QPoint &pos);
 
 private:
@@ -91,6 +92,7 @@ private:
     QPushButton *m_createBranchButton = nullptr;
     QPushButton *m_publishBranchButton = nullptr;
     QPushButton *m_mergeButton = nullptr;
+    QPushButton *m_remotesButton = nullptr;
     QPushButton *m_loadMoreButton = nullptr;
 
     QSplitter *m_mainSplitter = nullptr;
