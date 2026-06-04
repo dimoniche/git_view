@@ -5,6 +5,7 @@
 #include "ui/DiffHighlighter.h"
 
 #include <QComboBox>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QFont>
 #include <QFontMetrics>
@@ -23,6 +24,11 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
     m_summaryLabel = new QLabel(this);
     m_summaryLabel->setWordWrap(true);
     layout->addWidget(m_summaryLabel);
+
+    m_commitButton = new QPushButton(tr("Commit changes…"), this);
+    m_commitButton->setEnabled(false);
+    connect(m_commitButton, &QPushButton::clicked, this, &WorkingChangesPanel::commitRequested);
+    layout->addWidget(m_commitButton);
 
     m_scopeCombo = new QComboBox(this);
     m_scopeCombo->addItem(tr("Unstaged changes"), static_cast<int>(WorkingDiffScope::Unstaged));
@@ -86,6 +92,13 @@ void WorkingChangesPanel::setRepoContext(const QString &repoPath, GitService *gi
 {
     m_repoPath = repoPath;
     m_git = git;
+}
+
+void WorkingChangesPanel::setCommitEnabled(bool enabled)
+{
+    if (m_commitButton) {
+        m_commitButton->setEnabled(enabled);
+    }
 }
 
 void WorkingChangesPanel::refresh()

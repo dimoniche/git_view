@@ -9,6 +9,8 @@
 #include <QCloseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QPlainTextEdit>
+#include <QRadioButton>
 #include <QDir>
 #include <QFileDialog>
 #include <QFrame>
@@ -82,6 +84,14 @@ void MainWindow::setupUi()
     m_toggleDetailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
     connect(m_toggleDetailsAction, &QAction::toggled, this, &MainWindow::toggleDetailsPanel);
 
+    m_commitAction = toolbar->addAction(tr("Commit…"));
+    m_commitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
+    m_commitAction->setEnabled(false);
+    connect(m_commitAction, &QAction::triggered, this, &MainWindow::commitChanges);
+
+    auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
+    repoMenu->addAction(m_commitAction);
+
     auto *central = new QWidget(this);
     auto *rootLayout = new QVBoxLayout(central);
     rootLayout->setContentsMargins(6, 6, 6, 6);
@@ -140,6 +150,7 @@ void MainWindow::setupUi()
     detailsLayout->setContentsMargins(4, 4, 4, 4);
     m_detailsPanel = new CommitDetailsPanel(m_detailsPanelContainer);
     m_workingPanel = new WorkingChangesPanel(m_detailsPanelContainer);
+    connect(m_workingPanel, &WorkingChangesPanel::commitRequested, this, &MainWindow::commitChanges);
     m_detailsTabs = new QTabWidget(m_detailsPanelContainer);
     m_detailsTabs->addTab(m_detailsPanel, tr("Commit"));
     m_detailsTabs->addTab(m_workingPanel, tr("Working tree"));
@@ -362,7 +373,99 @@ void MainWindow::setRepository(const QString &path)
 
     m_mergeButton->setEnabled(true);
     m_loadMoreButton->setEnabled(true);
+    if (m_commitAction) {
+        m_commitAction->setEnabled(true);
+    }
+    if (m_workingPanel) {
+        m_workingPanel->setCommitEnabled(true);
+    }
     setStatusMessage(tr("Loaded %1").arg(topLevel));
+}
+
+void MainWindow::commitChanges()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Commit"), tr("Open a repository first."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Commit"),
+            tr("Cannot commit: resolve merge conflicts first.\n\n%1").arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    if (!m_git.hasUncommittedChanges(m_repo.path())) {
+        QMessageBox::information(this, tr("Commit"), tr("There are no changes to commit."));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Commit changes"));
+    dialog.resize(520, 360);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *stageAllRadio =
+        new QRadioButton(tr("Stage all changes and commit (git add -A)"), &dialog);
+    auto *stagedOnlyRadio = new QRadioButton(tr("Commit staged changes only"), &dialog);
+    stageAllRadio->setChecked(true);
+    if (!m_git.hasStagedChanges(m_repo.path())) {
+        stagedOnlyRadio->setEnabled(false);
+    }
+    layout->addWidget(stageAllRadio);
+    layout->addWidget(stagedOnlyRadio);
+
+    layout->addWidget(new QLabel(tr("Commit message:"), &dialog));
+    auto *messageEdit = new QPlainTextEdit(&dialog);
+    messageEdit->setPlaceholderText(tr("Describe your changes"));
+    messageEdit->setMinimumHeight(140);
+    layout->addWidget(messageEdit, 1);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString message = messageEdit->toPlainText().trimmed();
+    if (message.isEmpty()) {
+        QMessageBox::warning(this, tr("Commit"), tr("Commit message cannot be empty."));
+        return;
+    }
+
+    if (stageAllRadio->isChecked()) {
+        const GitProcessResult stageResult = m_git.stageAll(m_repo.path());
+        if (!stageResult.success()) {
+            QMessageBox::critical(this, tr("Commit"), m_git.lastError());
+            return;
+        }
+    } else if (!m_git.hasStagedChanges(m_repo.path())) {
+        QMessageBox::warning(this, tr("Commit"), tr("Nothing is staged. Stage changes first or use \"Stage all\"."));
+        return;
+    }
+
+    const GitProcessResult commitResult = m_git.commit(m_repo.path(), message);
+    if (!commitResult.success()) {
+        QMessageBox::critical(
+            this, tr("Commit failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), commitResult.stdoutText.trimmed()));
+        return;
+    }
+
+    const QString output = commitResult.stdoutText.trimmed();
+    QMessageBox::information(
+        this, tr("Commit"),
+        output.isEmpty() ? tr("Commit created successfully.") : output);
+    refreshRepository();
 }
 
 void MainWindow::updateRepoLabel()

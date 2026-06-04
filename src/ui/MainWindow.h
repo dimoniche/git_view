@@ -38,6 +38,7 @@ private slots:
     void toggleBranchesPanel(bool visible);
     void toggleDetailsPanel(bool visible);
     void focusHistoryPanel();
+    void commitChanges();
 
 private:
     void setupUi();
@@ -80,4 +81,5 @@ private:
 
     QAction *m_toggleBranchesAction = nullptr;
     QAction *m_toggleDetailsAction = nullptr;
+    QAction *m_commitAction = nullptr;
 };

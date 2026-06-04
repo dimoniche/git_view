@@ -147,6 +147,44 @@ bool GitService::hasUncommittedChanges(const QString &repoPath) const
     return !result.stdoutText.trimmed().isEmpty();
 }
 
+bool GitService::hasStagedChanges(const QString &repoPath) const
+{
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("diff"), QStringLiteral("--cached"),
+                                QStringLiteral("--quiet")});
+    return result.exitCode == 1;
+}
+
+GitProcessResult GitService::stageAll(const QString &repoPath) const
+{
+    m_lastError.clear();
+    const GitProcessResult result = m_runner.run(repoPath, {QStringLiteral("add"), QStringLiteral("-A")});
+    if (!result.success()) {
+        setError(QStringLiteral("git add failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::commit(const QString &repoPath, const QString &message) const
+{
+    m_lastError.clear();
+
+    const QString trimmed = message.trimmed();
+    if (trimmed.isEmpty()) {
+        m_lastError = QStringLiteral("Commit message is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("commit"), QStringLiteral("-m"), trimmed});
+    if (!result.success()) {
+        setError(QStringLiteral("git commit failed"), result);
+    }
+    return result;
+}
+
 CommitDetails GitService::commitDetails(const QString &repoPath, const QString &hash) const
 {
     m_lastError.clear();

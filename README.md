@@ -55,6 +55,7 @@ Create a sample repository for manual testing:
 - Commit history with **branch graph** (lane layout) and metadata columns
 - Commit details panel: file list + **per-file diff** (`git show`, syntax highlighting)
 - **Working tree** tab: uncommitted/staged changes (`git status`, `git diff`)
+- **Commit** working tree changes (`git add -A`, `git commit`) via dialog
 - Merge branch into current (optional `--no-ff`, conflict file list, abort merge)
 - Load more commits (pagination in pages of 500)
 

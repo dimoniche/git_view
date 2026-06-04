@@ -33,6 +33,10 @@ public:
     std::vector<Branch> branches(const QString &repoPath) const;
     QString currentBranch(const QString &repoPath) const;
     bool hasUncommittedChanges(const QString &repoPath) const;
+    bool hasStagedChanges(const QString &repoPath) const;
+
+    GitProcessResult stageAll(const QString &repoPath) const;
+    GitProcessResult commit(const QString &repoPath, const QString &message) const;
 
     GitProcessResult merge(const QString &repoPath,
                            const QString &branch,

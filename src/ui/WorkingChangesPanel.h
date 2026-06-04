@@ -7,6 +7,7 @@
 #include <vector>
 
 class QLabel;
+class QPushButton;
 class QListWidget;
 class QPlainTextEdit;
 class QComboBox;
@@ -19,6 +20,10 @@ public:
 
     void setRepoContext(const QString &repoPath, GitService *git);
     void refresh();
+    void setCommitEnabled(bool enabled);
+
+signals:
+    void commitRequested();
 
 private slots:
     void onFileSelectionChanged();
@@ -35,6 +40,7 @@ private:
     std::vector<WorkingTreeChange> m_changes;
 
     QLabel *m_summaryLabel = nullptr;
+    QPushButton *m_commitButton = nullptr;
     QComboBox *m_scopeCombo = nullptr;
     QListWidget *m_filesList = nullptr;
     QLabel *m_diffTitle = nullptr;
