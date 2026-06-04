@@ -9,6 +9,8 @@
 #include <QCloseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QComboBox>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QRadioButton>
 #include <QDir>
@@ -89,7 +91,12 @@ void MainWindow::setupUi()
     m_commitAction->setEnabled(false);
     connect(m_commitAction, &QAction::triggered, this, &MainWindow::commitChanges);
 
+    auto *newBranchAction = new QAction(tr("New branch…"), this);
+    newBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
+    connect(newBranchAction, &QAction::triggered, this, &MainWindow::createBranch);
+
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
+    repoMenu->addAction(newBranchAction);
     repoMenu->addAction(m_commitAction);
 
     auto *central = new QWidget(this);
@@ -119,6 +126,10 @@ void MainWindow::setupUi()
     m_branchList = new QListWidget(m_branchPanel);
     connect(m_branchList, &QListWidget::currentRowChanged, this, &MainWindow::onBranchSelected);
     branchLayout->addWidget(m_branchList, 1);
+    m_createBranchButton = new QPushButton(tr("New branch…"), m_branchPanel);
+    m_createBranchButton->setEnabled(false);
+    connect(m_createBranchButton, &QPushButton::clicked, this, &MainWindow::createBranch);
+    branchLayout->addWidget(m_createBranchButton);
     m_mergeButton = new QPushButton(tr("Merge into current…"), m_branchPanel);
     m_mergeButton->setEnabled(false);
     connect(m_mergeButton, &QPushButton::clicked, this, &MainWindow::mergeSelectedBranch);
@@ -371,6 +382,7 @@ void MainWindow::setRepository(const QString &path)
         m_detailsTabs->setCurrentWidget(m_workingPanel);
     }
 
+    m_createBranchButton->setEnabled(true);
     m_mergeButton->setEnabled(true);
     m_loadMoreButton->setEnabled(true);
     if (m_commitAction) {
@@ -602,6 +614,101 @@ Branch MainWindow::branchAtRow(int row) const
         return m_branches[static_cast<size_t>(row)];
     }
     return {};
+}
+
+void MainWindow::createBranch()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("New branch"), tr("Open a repository first."));
+        return;
+    }
+
+    const int row = m_branchList->currentRow();
+    const Branch selected = branchAtRow(row);
+    const QString current = m_git.currentBranch(m_repo.path());
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Create branch"));
+    dialog.resize(440, 220);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Branch name:"), &dialog));
+
+    auto *nameEdit = new QLineEdit(&dialog);
+    if (!selected.name.isEmpty() && !selected.isRemote) {
+        nameEdit->setText(selected.name + QStringLiteral("-copy"));
+    }
+    layout->addWidget(nameEdit);
+
+    layout->addWidget(new QLabel(tr("Based on:"), &dialog));
+    auto *baseCombo = new QComboBox(&dialog);
+    baseCombo->addItem(tr("Current branch (%1)").arg(current), QString());
+    if (!selected.name.isEmpty()) {
+        baseCombo->addItem(tr("Selected: %1").arg(selected.name), selected.name);
+    }
+    layout->addWidget(baseCombo);
+
+    auto *checkoutCheck = new QCheckBox(tr("Switch to new branch after creation"), &dialog);
+    checkoutCheck->setChecked(true);
+    layout->addWidget(checkoutCheck);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString branchName = nameEdit->text().trimmed();
+    const QString validation = m_git.validateBranchName(m_repo.path(), branchName);
+    if (!validation.isEmpty()) {
+        QMessageBox::warning(this, tr("New branch"), validation);
+        return;
+    }
+
+    if (m_git.branchExists(m_repo.path(), branchName)) {
+        QMessageBox::warning(
+            this, tr("New branch"),
+            tr("Branch \"%1\" already exists. Choose another name or delete the existing branch.")
+                .arg(branchName));
+        return;
+    }
+
+    const QString startPoint = baseCombo->currentData().toString().trimmed();
+    const bool checkout = checkoutCheck->isChecked();
+
+    if (checkout && m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto answer = QMessageBox::warning(
+            this, tr("New branch"),
+            tr("The working tree has uncommitted changes. Switch branch anyway?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    GitProcessResult result;
+    if (checkout) {
+        result = m_git.createBranchAndCheckout(m_repo.path(), branchName, startPoint);
+    } else {
+        result = m_git.createBranch(m_repo.path(), branchName, startPoint);
+    }
+
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("New branch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed();
+    QMessageBox::information(
+        this, tr("New branch"),
+        output.isEmpty() ? tr("Branch \"%1\" created.").arg(branchName) : output);
+    refreshRepository();
 }
 
 void MainWindow::mergeSelectedBranch()

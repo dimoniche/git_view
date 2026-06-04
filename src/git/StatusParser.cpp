@@ -4,6 +4,7 @@ namespace StatusParser {
 
 QString normalizeGitPath(QString path)
 {
+    path.remove(QLatin1Char('\r'));
     path = path.trimmed();
     if (path.size() >= 2 && path.front() == QLatin1Char('"') && path.back() == QLatin1Char('"')) {
         path = path.mid(1, path.size() - 2);

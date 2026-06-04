@@ -34,16 +34,15 @@ GitProcessResult GitProcessRunner::run(const QString &repoPath,
     command << args;
 
     QProcess process;
-    process.setProgram(findGitExecutable());
-    process.setArguments(command);
     process.setProcessChannelMode(QProcess::SeparateChannels);
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
     env.insert(QStringLiteral("LANG"), QStringLiteral("C"));
+    env.insert(QStringLiteral("GIT_PAGER"), QString());
     process.setProcessEnvironment(env);
 
-    process.start();
+    process.start(findGitExecutable(), command);
     if (!process.waitForStarted()) {
         result.stderrText =
             QStringLiteral("Failed to start git: %1").arg(process.errorString());

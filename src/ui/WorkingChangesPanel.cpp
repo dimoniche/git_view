@@ -5,6 +5,7 @@
 #include "ui/DiffHighlighter.h"
 
 #include <QComboBox>
+#include <QFileInfo>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QFont>
@@ -90,7 +91,8 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
 
 void WorkingChangesPanel::setRepoContext(const QString &repoPath, GitService *git)
 {
-    m_repoPath = repoPath;
+    const QString canonical = QFileInfo(repoPath).canonicalFilePath();
+    m_repoPath = canonical.isEmpty() ? repoPath : canonical;
     m_git = git;
 }
 
@@ -166,15 +168,9 @@ void WorkingChangesPanel::applyBestScopeForChange(const WorkingTreeChange &chang
 
 void WorkingChangesPanel::onFileSelectionChanged()
 {
-    const QListWidgetItem *item = m_filesList->currentItem();
-    if (item) {
-        const QString path = item->data(Qt::UserRole).toString();
-        for (const WorkingTreeChange &change : m_changes) {
-            if (change.path == path) {
-                applyBestScopeForChange(change);
-                break;
-            }
-        }
+    const int row = m_filesList->currentRow();
+    if (row >= 0 && row < static_cast<int>(m_changes.size())) {
+        applyBestScopeForChange(m_changes[static_cast<size_t>(row)]);
     }
     loadDiffForCurrentFile();
 }
@@ -186,7 +182,14 @@ void WorkingChangesPanel::onScopeChanged()
 
 WorkingDiffScope WorkingChangesPanel::currentScope() const
 {
-    return static_cast<WorkingDiffScope>(m_scopeCombo->currentData().toInt());
+    switch (m_scopeCombo->currentIndex()) {
+    case 1:
+        return WorkingDiffScope::Staged;
+    case 2:
+        return WorkingDiffScope::AgainstHead;
+    default:
+        return WorkingDiffScope::Unstaged;
+    }
 }
 
 void WorkingChangesPanel::loadDiffForCurrentFile()
@@ -202,26 +205,41 @@ void WorkingChangesPanel::loadDiffForCurrentFile()
         return;
     }
 
-    const QString path = item->data(Qt::UserRole).toString();
+    m_changes = m_git->workingTreeChanges(m_repoPath);
+
+    WorkingTreeChange change;
+    QString path;
+
+    const int row = m_filesList->currentRow();
+    if (row >= 0 && row < static_cast<int>(m_changes.size())) {
+        change = m_changes[static_cast<size_t>(row)];
+        path = change.path;
+    } else {
+        path = item->data(Qt::UserRole).toString();
+        if (path.isEmpty()) {
+            showDiffText({}, tr("Diff"));
+            return;
+        }
+        for (const WorkingTreeChange &candidate : m_changes) {
+            if (candidate.path == path) {
+                change = candidate;
+                path = change.path;
+                break;
+            }
+        }
+        if (change.path.isEmpty()) {
+            change.path = path;
+            const QString xy = item->data(Qt::UserRole + 1).toString();
+            if (xy.size() >= 2) {
+                change.indexStatus = xy.at(0);
+                change.workTreeStatus = xy.at(1);
+            }
+        }
+    }
+
     if (path.isEmpty()) {
         showDiffText({}, tr("Diff"));
         return;
-    }
-
-    WorkingTreeChange change;
-    for (const WorkingTreeChange &candidate : m_changes) {
-        if (candidate.path == path) {
-            change = candidate;
-            break;
-        }
-    }
-    if (change.path.isEmpty()) {
-        change.path = path;
-        const QString xy = item->data(Qt::UserRole + 1).toString();
-        if (xy.size() >= 2) {
-            change.indexStatus = xy.at(0);
-            change.workTreeStatus = xy.at(1);
-        }
     }
 
     WorkingDiffScope scope = currentScope();

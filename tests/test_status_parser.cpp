@@ -10,6 +10,8 @@ private slots:
     void parsesStagedAddWithOneSpace();
     void parsesUntracked();
     void parsesModifiedInWorkTree();
+    void parsesStagedOnlyModified();
+    void stripsCarriageReturnFromPath();
     void unquotesPorcelainPath();
 };
 
@@ -39,6 +41,23 @@ void TestStatusParser::parsesModifiedInWorkTree()
     WorkingTreeChange change;
     QVERIFY(StatusParser::parsePorcelainLine(QStringLiteral(" M Beta.txt"), &change));
     QCOMPARE(change.path, QStringLiteral("Beta.txt"));
+}
+
+void TestStatusParser::parsesStagedOnlyModified()
+{
+    WorkingTreeChange change;
+    QVERIFY(StatusParser::parsePorcelainLine(QStringLiteral("M  README.md"), &change));
+    QCOMPARE(change.path, QStringLiteral("README.md"));
+    QCOMPARE(change.statusLabel(), QStringLiteral("M "));
+    QVERIFY(change.hasStaged());
+    QVERIFY(!change.hasUnstaged());
+}
+
+void TestStatusParser::stripsCarriageReturnFromPath()
+{
+    WorkingTreeChange change;
+    QVERIFY(StatusParser::parsePorcelainLine(QStringLiteral("M  README.md\r"), &change));
+    QCOMPARE(change.path, QStringLiteral("README.md"));
 }
 
 void TestStatusParser::unquotesPorcelainPath()

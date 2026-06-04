@@ -33,6 +33,7 @@ private slots:
     void refreshRepository();
     void onBranchSelected(int row);
     void mergeSelectedBranch();
+    void createBranch();
     void loadMoreCommits();
     void onCommitSelected(const QString &hash);
     void toggleBranchesPanel(bool visible);
@@ -72,6 +73,7 @@ private:
     WorkingChangesPanel *m_workingPanel = nullptr;
     QTabWidget *m_detailsTabs = nullptr;
     QScrollArea *m_historyScroll = nullptr;
+    QPushButton *m_createBranchButton = nullptr;
     QPushButton *m_mergeButton = nullptr;
     QPushButton *m_loadMoreButton = nullptr;
 
