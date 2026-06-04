@@ -11,10 +11,12 @@ private slots:
     void parsesUntracked();
     void parsesModifiedInWorkTree();
     void parsesStagedOnlyModified();
+    void porcelainDisplayShowsSpaces();
     void stripsCarriageReturnFromPath();
     void unquotesPorcelainPath();
     void decodesUtf8OctalQuotedPath();
     void parsesPlainUtf8Path();
+    void leadingSpacePreservedForUnstagedLine();
 };
 
 void TestStatusParser::parsesStagedAddWithTwoSpaces()
@@ -55,6 +57,21 @@ void TestStatusParser::parsesStagedOnlyModified()
     QVERIFY(!change.hasUnstaged());
 }
 
+void TestStatusParser::porcelainDisplayShowsSpaces()
+{
+    WorkingTreeChange unstagedOnly;
+    QVERIFY(StatusParser::parsePorcelainLine(QStringLiteral(" M Beta.txt"), &unstagedOnly));
+    QCOMPARE(unstagedOnly.porcelainStatusDisplay(), QStringLiteral("·M"));
+    QVERIFY(!unstagedOnly.hasStaged());
+    QVERIFY(unstagedOnly.hasUnstaged());
+
+    WorkingTreeChange stagedOnly;
+    QVERIFY(StatusParser::parsePorcelainLine(QStringLiteral("M  README.md"), &stagedOnly));
+    QCOMPARE(stagedOnly.porcelainStatusDisplay(), QStringLiteral("M·"));
+    QVERIFY(stagedOnly.hasStaged());
+    QVERIFY(!stagedOnly.hasUnstaged());
+}
+
 void TestStatusParser::stripsCarriageReturnFromPath()
 {
     WorkingTreeChange change;
@@ -87,6 +104,22 @@ void TestStatusParser::parsesPlainUtf8Path()
     const QString line = QStringLiteral("?? ") + expected;
     QVERIFY(StatusParser::parsePorcelainLine(line, &change));
     QCOMPARE(change.path, expected);
+}
+
+void TestStatusParser::leadingSpacePreservedForUnstagedLine()
+{
+    const QString raw = QStringLiteral(" M Beta.txt\r");
+
+    WorkingTreeChange trimmedParse;
+    QVERIFY(StatusParser::parsePorcelainLine(raw.trimmed(), &trimmedParse));
+    QVERIFY(trimmedParse.hasStaged());
+    QVERIFY(!trimmedParse.hasUnstaged());
+
+    WorkingTreeChange change;
+    QVERIFY(StatusParser::parsePorcelainLine(StatusParser::normalizePorcelainLine(raw), &change));
+    QCOMPARE(change.path, QStringLiteral("Beta.txt"));
+    QVERIFY(!change.hasStaged());
+    QVERIFY(change.hasUnstaged());
 }
 
 QTEST_MAIN(TestStatusParser)

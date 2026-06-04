@@ -17,7 +17,9 @@
 #include <QRadioButton>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
@@ -57,6 +59,10 @@ void MainWindow::setupUi()
     setWindowTitle(tr("git_view"));
     resize(1200, 800);
 
+    auto *newRepoAction = new QAction(tr("&New repository…"), this);
+    newRepoAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N));
+    connect(newRepoAction, &QAction::triggered, this, &MainWindow::createRepository);
+
     auto *openAction = new QAction(tr("&Open repository…"), this);
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openRepository);
@@ -66,6 +72,7 @@ void MainWindow::setupUi()
     connect(refreshAction, &QAction::triggered, this, &MainWindow::refreshRepository);
 
     auto *fileMenu = menuBar()->addMenu(tr("&File"));
+    fileMenu->addAction(newRepoAction);
     fileMenu->addAction(openAction);
     fileMenu->addAction(refreshAction);
     fileMenu->addSeparator();
@@ -393,6 +400,105 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     saveWindowLayout();
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::createRepository()
+{
+    const QString startDir = m_repo.isValid() ? m_repo.path() : QDir::homePath();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("New repository"));
+    dialog.resize(480, 200);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    layout->addWidget(new QLabel(tr("Folder for the new repository:"), &dialog));
+
+    auto *pathRow = new QHBoxLayout();
+    auto *pathEdit = new QLineEdit(&dialog);
+    pathEdit->setPlaceholderText(startDir);
+    pathRow->addWidget(pathEdit, 1);
+
+    auto *browseButton = new QPushButton(tr("Browse…"), &dialog);
+    connect(browseButton, &QPushButton::clicked, &dialog, [&]() {
+        const QString dir = QFileDialog::getExistingDirectory(
+            &dialog, tr("Choose folder"), pathEdit->text().trimmed().isEmpty()
+                                                ? startDir
+                                                : pathEdit->text().trimmed());
+        if (!dir.isEmpty()) {
+            pathEdit->setText(dir);
+        }
+    });
+    pathRow->addWidget(browseButton);
+    layout->addLayout(pathRow);
+
+    layout->addWidget(new QLabel(tr("Initial branch name:"), &dialog));
+    auto *branchEdit = new QLineEdit(QStringLiteral("main"), &dialog);
+    layout->addWidget(branchEdit);
+
+    layout->addWidget(
+        new QLabel(tr("If the folder does not exist, it will be created."), &dialog));
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    QString path = pathEdit->text().trimmed();
+    if (path.isEmpty()) {
+        QMessageBox::warning(this, tr("New repository"), tr("Choose a folder path."));
+        return;
+    }
+
+    QFileInfo pathInfo(path);
+    if (!pathInfo.isAbsolute()) {
+        path = QDir(startDir).filePath(path);
+        pathInfo.setFile(path);
+    }
+
+    if (m_git.isRepository(path)) {
+        const auto answer = QMessageBox::question(
+            this, tr("New repository"),
+            tr("\"%1\" is already a git repository.\nOpen it instead?").arg(path),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (answer == QMessageBox::Yes) {
+            setRepository(path);
+        }
+        return;
+    }
+
+    if (!pathInfo.exists()) {
+        if (!QDir().mkpath(path)) {
+            QMessageBox::critical(this, tr("New repository"),
+                                  tr("Could not create folder:\n%1").arg(path));
+            return;
+        }
+    } else if (!pathInfo.isDir()) {
+        QMessageBox::warning(this, tr("New repository"),
+                             tr("Path is not a directory:\n%1").arg(path));
+        return;
+    }
+
+    const QString branchName = branchEdit->text().trimmed();
+    const GitProcessResult result = m_git.initRepository(path, branchName);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("New repository failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    if (!output.isEmpty()) {
+        QMessageBox::information(this, tr("New repository"), output);
+    }
+
+    setRepository(path);
 }
 
 void MainWindow::openRepository()

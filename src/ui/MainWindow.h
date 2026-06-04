@@ -32,6 +32,7 @@ protected:
 
 private slots:
     void openRepository();
+    void createRepository();
     void refreshRepository();
     void onBranchSelected(int row);
     void mergeSelectedBranch();

@@ -8,9 +8,9 @@
 
 class QLabel;
 class QPushButton;
-class QListWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QPlainTextEdit;
-class QComboBox;
 
 class WorkingChangesPanel : public QWidget {
     Q_OBJECT
@@ -32,7 +32,6 @@ signals:
 
 private slots:
     void onFileSelectionChanged();
-    void onScopeChanged();
     void onDiscardFileClicked();
     void onDiscardAllClicked();
     void updateDiscardFileButton();
@@ -41,19 +40,22 @@ private slots:
 private:
     void loadDiffForCurrentFile();
     void showDiffText(const QString &text, const QString &title);
-    void applyBestScopeForChange(const WorkingTreeChange &change);
-    WorkingDiffScope currentScope() const;
+    void rebuildChangeTree();
+    void selectTreeItem(const QString &path, WorkingDiffScope scope);
+    WorkingTreeChange changeForPath(const QString &path) const;
+    bool isStagedEntry(const WorkingTreeChange &change) const;
+    WorkingDiffScope selectedItemScope() const;
+    const QTreeWidgetItem *selectedFileItem() const;
 
     QString m_repoPath;
     GitService *m_git = nullptr;
-    std::vector<WorkingTreeChange> m_changes;
+    std::vector<WorkingTreeChange> m_allChanges;
 
     QLabel *m_summaryLabel = nullptr;
     QPushButton *m_commitButton = nullptr;
     QPushButton *m_discardFileButton = nullptr;
     QPushButton *m_discardAllButton = nullptr;
-    QComboBox *m_scopeCombo = nullptr;
-    QListWidget *m_filesList = nullptr;
+    QTreeWidget *m_filesTree = nullptr;
     QLabel *m_diffTitle = nullptr;
     QPlainTextEdit *m_diffView = nullptr;
 };

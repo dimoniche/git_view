@@ -4,7 +4,6 @@
 #include "git/GitService.h"
 #include "ui/DiffHighlighter.h"
 
-#include <QComboBox>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QMenu>
@@ -13,13 +12,22 @@
 #include <QFont>
 #include <QFontMetrics>
 #include <QLabel>
-#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
 namespace {
+
+enum TreeRoles {
+    KindRole = Qt::UserRole,
+    PathRole = Qt::UserRole + 1,
+    ScopeRole = Qt::UserRole + 2,
+};
+
+enum class TreeItemKind { Header, File };
 
 void makeCompactToolButton(QPushButton *button)
 {
@@ -33,6 +41,31 @@ void makeCompactToolButton(QPushButton *button)
     const int height = QFontMetrics(font).height() + 6;
     button->setFixedHeight(height);
     button->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+}
+
+QString statusLetter(const WorkingTreeChange &change, WorkingDiffScope section)
+{
+    if (change.isUntracked()) {
+        return QStringLiteral("U");
+    }
+    if (section == WorkingDiffScope::Staged) {
+        const QChar status = change.indexStatus;
+        return status == QLatin1Char(' ') ? QStringLiteral("?") : QString(status);
+    }
+    const QChar status = change.workTreeStatus;
+    return status == QLatin1Char(' ') ? QStringLiteral("?") : QString(status);
+}
+
+QString fileLineText(const WorkingTreeChange &change, WorkingDiffScope section)
+{
+    return QStringLiteral("%1  %2").arg(statusLetter(change, section), change.path);
+}
+
+QFont headerFont(const QFont &base)
+{
+    QFont font = base;
+    font.setBold(true);
+    return font;
 }
 
 } // namespace
@@ -72,31 +105,21 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
     actionsRow->addStretch(1);
     layout->addLayout(actionsRow);
 
-    m_scopeCombo = new QComboBox(this);
-    m_scopeCombo->addItem(tr("Unstaged changes"), static_cast<int>(WorkingDiffScope::Unstaged));
-    m_scopeCombo->addItem(tr("Staged changes"), static_cast<int>(WorkingDiffScope::Staged));
-    m_scopeCombo->addItem(tr("All vs HEAD"), static_cast<int>(WorkingDiffScope::AgainstHead));
-    connect(m_scopeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &WorkingChangesPanel::onScopeChanged);
-    layout->addWidget(m_scopeCombo);
-
     auto *splitter = new QSplitter(Qt::Vertical, this);
 
-    auto *filesWidget = new QWidget(splitter);
-    auto *filesLayout = new QVBoxLayout(filesWidget);
-    filesLayout->setContentsMargins(0, 0, 0, 0);
-    filesLayout->addWidget(new QLabel(tr("Changed files"), filesWidget));
-
-    m_filesList = new QListWidget(filesWidget);
-    m_filesList->setMinimumHeight(80);
-    m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_filesList, &QListWidget::currentRowChanged, this,
+    m_filesTree = new QTreeWidget(splitter);
+    m_filesTree->setHeaderHidden(true);
+    m_filesTree->setRootIsDecorated(true);
+    m_filesTree->setIndentation(14);
+    m_filesTree->setMinimumHeight(80);
+    m_filesTree->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_filesTree->setUniformRowHeights(true);
+    connect(m_filesTree, &QTreeWidget::currentItemChanged, this,
             &WorkingChangesPanel::onFileSelectionChanged);
-    connect(m_filesList, &QWidget::customContextMenuRequested, this,
+    connect(m_filesTree, &QWidget::customContextMenuRequested, this,
             &WorkingChangesPanel::showFilesContextMenu);
-    filesLayout->addWidget(m_filesList);
 
-    splitter->addWidget(filesWidget);
+    splitter->addWidget(m_filesTree);
 
     auto *diffWidget = new QWidget(splitter);
     auto *diffLayout = new QVBoxLayout(diffWidget);
@@ -151,25 +174,52 @@ void WorkingChangesPanel::setCommitEnabled(bool enabled)
     updateDiscardFileButton();
 }
 
+bool WorkingChangesPanel::isStagedEntry(const WorkingTreeChange &change) const
+{
+    if (!change.hasStaged()) {
+        return false;
+    }
+    return !m_git || m_git->hasCachedDiffForPath(m_repoPath, change.path);
+}
+
+const QTreeWidgetItem *WorkingChangesPanel::selectedFileItem() const
+{
+    const QTreeWidgetItem *item = m_filesTree ? m_filesTree->currentItem() : nullptr;
+    if (!item) {
+        return nullptr;
+    }
+    if (item->data(0, KindRole).toInt() != static_cast<int>(TreeItemKind::File)) {
+        return nullptr;
+    }
+    return item;
+}
+
+WorkingDiffScope WorkingChangesPanel::selectedItemScope() const
+{
+    const QTreeWidgetItem *item = selectedFileItem();
+    if (!item) {
+        return WorkingDiffScope::Unstaged;
+    }
+    return static_cast<WorkingDiffScope>(item->data(0, ScopeRole).toInt());
+}
+
 void WorkingChangesPanel::updateDiscardFileButton()
 {
     if (!m_discardFileButton) {
         return;
     }
     const bool hasRepo = m_git && !m_repoPath.isEmpty();
-    const int row = m_filesList ? m_filesList->currentRow() : -1;
-    const bool hasFile =
-        hasRepo && row >= 0 && row < static_cast<int>(m_changes.size()) && !m_changes.empty();
+    const bool hasFile = hasRepo && selectedFileItem() != nullptr;
     m_discardFileButton->setEnabled(hasFile && m_discardAllButton && m_discardAllButton->isEnabled());
 }
 
 void WorkingChangesPanel::onDiscardFileClicked()
 {
-    const int row = m_filesList->currentRow();
-    if (row < 0 || row >= static_cast<int>(m_changes.size())) {
+    const QString path = selectedFilePath();
+    if (path.isEmpty()) {
         return;
     }
-    emit discardFileRequested(m_changes[static_cast<size_t>(row)].path);
+    emit discardFileRequested(path);
 }
 
 void WorkingChangesPanel::onDiscardAllClicked()
@@ -179,53 +229,92 @@ void WorkingChangesPanel::onDiscardAllClicked()
 
 QString WorkingChangesPanel::selectedFilePath() const
 {
-    const int row = m_filesList ? m_filesList->currentRow() : -1;
-    if (row < 0 || row >= static_cast<int>(m_changes.size())) {
+    const QTreeWidgetItem *item = selectedFileItem();
+    if (!item) {
         return {};
     }
-    return m_changes[static_cast<size_t>(row)].path;
+    return item->data(0, PathRole).toString();
 }
 
 bool WorkingChangesPanel::hasSelectedChange() const
 {
-    const int row = m_filesList ? m_filesList->currentRow() : -1;
-    return row >= 0 && row < static_cast<int>(m_changes.size()) && !m_changes.empty();
+    return selectedFileItem() != nullptr;
+}
+
+void WorkingChangesPanel::selectTreeItem(const QString &path, WorkingDiffScope scope)
+{
+    if (!m_filesTree || path.isEmpty()) {
+        return;
+    }
+
+    const auto matches = [&](const QTreeWidgetItem *item) {
+        return item && item->data(0, KindRole).toInt() == static_cast<int>(TreeItemKind::File)
+               && item->data(0, PathRole).toString() == path
+               && static_cast<WorkingDiffScope>(item->data(0, ScopeRole).toInt()) == scope;
+    };
+
+    const int topCount = m_filesTree->topLevelItemCount();
+    for (int i = 0; i < topCount; ++i) {
+        QTreeWidgetItem *section = m_filesTree->topLevelItem(i);
+        for (int j = 0; j < section->childCount(); ++j) {
+            QTreeWidgetItem *child = section->child(j);
+            if (matches(child)) {
+                m_filesTree->setCurrentItem(child);
+                return;
+            }
+        }
+    }
 }
 
 void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
 {
     QMenu menu(this);
 
-    QListWidgetItem *item = m_filesList->itemAt(pos);
-    const int row = item ? m_filesList->row(item) : -1;
-    const bool hasChange =
-        row >= 0 && row < static_cast<int>(m_changes.size()) && !m_changes.empty();
+    QTreeWidgetItem *item = m_filesTree->itemAt(pos);
+    const bool isFile =
+        item && item->data(0, KindRole).toInt() == static_cast<int>(TreeItemKind::File);
 
-    if (hasChange) {
-        m_filesList->setCurrentRow(row);
-        const WorkingTreeChange &change = m_changes[static_cast<size_t>(row)];
+    if (isFile) {
+        m_filesTree->setCurrentItem(item);
+        const QString path = item->data(0, PathRole).toString();
+        const WorkingTreeChange change = changeForPath(path);
 
         QAction *discardFileAction =
             menu.addAction(tr("Discard file changes…"), this, &WorkingChangesPanel::onDiscardFileClicked);
         discardFileAction->setEnabled(m_discardFileButton && m_discardFileButton->isEnabled());
 
-        QMenu *diffMenu = menu.addMenu(tr("Show diff"));
-        if (change.hasUnstaged() || change.isUntracked()) {
-            diffMenu->addAction(tr("Unstaged changes"), this, [this]() {
-                m_scopeCombo->setCurrentIndex(0);
-                loadDiffForCurrentFile();
+        const bool inStaged = isStagedEntry(change);
+        const bool inChanges = change.hasUnstaged() || change.isUntracked();
+        if (inStaged && inChanges) {
+            QMenu *diffMenu = menu.addMenu(tr("Show diff"));
+            diffMenu->addAction(tr("Staged Changes"), this, [this, path]() {
+                selectTreeItem(path, WorkingDiffScope::Staged);
+            });
+            diffMenu->addAction(tr("Changes"), this, [this, path]() {
+                selectTreeItem(path, WorkingDiffScope::Unstaged);
+            });
+            diffMenu->addAction(tr("All vs HEAD"), this, [this, path]() {
+                if (!m_git) {
+                    return;
+                }
+                const WorkingTreeChange ch = changeForPath(path);
+                const QString diff =
+                    m_git->workingTreeFileDiff(m_repoPath, path, WorkingDiffScope::AgainstHead, ch);
+                showDiffText(diff.isEmpty() ? tr("No diff vs HEAD.") : diff,
+                             tr("Diff (vs HEAD): %1").arg(path));
+            });
+        } else if (inStaged || inChanges) {
+            menu.addAction(tr("Diff vs HEAD"), this, [this, path]() {
+                if (!m_git) {
+                    return;
+                }
+                const WorkingTreeChange ch = changeForPath(path);
+                const QString diff =
+                    m_git->workingTreeFileDiff(m_repoPath, path, WorkingDiffScope::AgainstHead, ch);
+                showDiffText(diff.isEmpty() ? tr("No diff vs HEAD.") : diff,
+                             tr("Diff (vs HEAD): %1").arg(path));
             });
         }
-        if (change.hasStaged()) {
-            diffMenu->addAction(tr("Staged changes"), this, [this]() {
-                m_scopeCombo->setCurrentIndex(1);
-                loadDiffForCurrentFile();
-            });
-        }
-        diffMenu->addAction(tr("All vs HEAD"), this, [this]() {
-            m_scopeCombo->setCurrentIndex(2);
-            loadDiffForCurrentFile();
-        });
 
         menu.addSeparator();
     }
@@ -238,12 +327,13 @@ void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
         menu.addAction(tr("Discard all changes…"), this, &WorkingChangesPanel::onDiscardAllClicked);
     discardAllAction->setEnabled(m_discardAllButton && m_discardAllButton->isEnabled());
 
-    menu.exec(m_filesList->mapToGlobal(pos));
+    menu.exec(m_filesTree->mapToGlobal(pos));
 }
 
 void WorkingChangesPanel::refresh()
 {
-    m_filesList->clear();
+    m_allChanges.clear();
+    m_filesTree->clear();
 
     if (!m_git || m_repoPath.isEmpty()) {
         m_summaryLabel->setText(tr("Open a repository"));
@@ -252,88 +342,155 @@ void WorkingChangesPanel::refresh()
         return;
     }
 
-    m_changes = m_git->workingTreeChanges(m_repoPath);
-    if (m_changes.empty() && !m_git->lastError().isEmpty()) {
+    m_allChanges = m_git->workingTreeChanges(m_repoPath);
+    if (m_allChanges.empty() && !m_git->lastError().isEmpty()) {
         m_summaryLabel->setText(m_git->lastError());
         showDiffText({}, tr("Diff"));
         return;
     }
 
-    int stagedCount = 0;
-    int unstagedCount = 0;
-    for (const WorkingTreeChange &change : m_changes) {
-        if (change.hasStaged()) {
-            ++stagedCount;
-        }
-        if (change.hasUnstaged()) {
-            ++unstagedCount;
-        }
-
-        auto *item = new QListWidgetItem(
-            QStringLiteral("[%1] %2").arg(change.statusDescription(), change.path), m_filesList);
-        item->setData(Qt::UserRole, change.path);
-        item->setData(Qt::UserRole + 1, change.statusLabel());
-        item->setToolTip(tr("Status %1 — %2").arg(change.statusLabel(), change.path));
-    }
-
-    if (m_changes.empty()) {
+    if (m_allChanges.empty()) {
         m_summaryLabel->setText(tr("Working tree clean — no uncommitted changes"));
-        m_filesList->addItem(tr("(no changes)"));
+        auto *empty = new QTreeWidgetItem(m_filesTree);
+        empty->setText(0, tr("(no changes)"));
+        empty->setFlags(Qt::NoItemFlags);
         showDiffText({}, tr("Diff"));
         updateDiscardFileButton();
         return;
     }
 
-    m_summaryLabel->setText(tr("%1 file(s): %2 staged, %3 unstaged")
-                                .arg(m_changes.size())
-                                .arg(stagedCount)
-                                .arg(unstagedCount));
-
-    m_filesList->setCurrentRow(0);
-    updateDiscardFileButton();
-    emit fileSelectionChanged();
+    rebuildChangeTree();
 }
 
-void WorkingChangesPanel::applyBestScopeForChange(const WorkingTreeChange &change)
+WorkingTreeChange WorkingChangesPanel::changeForPath(const QString &path) const
 {
-    QSignalBlocker blocker(m_scopeCombo);
-    if (change.isUntracked()) {
-        m_scopeCombo->setCurrentIndex(0);
-    } else if (change.hasStaged() && change.hasUnstaged()) {
-        m_scopeCombo->setCurrentIndex(2);
-    } else if (change.hasStaged()) {
-        m_scopeCombo->setCurrentIndex(1);
-    } else {
-        m_scopeCombo->setCurrentIndex(0);
+    for (const WorkingTreeChange &change : m_allChanges) {
+        if (change.path == path) {
+            return change;
+        }
+    }
+
+    if (m_git && !m_repoPath.isEmpty()) {
+        return m_git->changeForPath(m_repoPath, path);
+    }
+
+    WorkingTreeChange fallback;
+    fallback.path = path;
+    return fallback;
+}
+
+void WorkingChangesPanel::rebuildChangeTree()
+{
+    const QString previousPath = selectedFilePath();
+    const WorkingDiffScope previousScope = selectedItemScope();
+
+    std::vector<WorkingTreeChange> stagedFiles;
+    std::vector<WorkingTreeChange> changeFiles;
+
+    for (const WorkingTreeChange &change : m_allChanges) {
+        if (isStagedEntry(change)) {
+            stagedFiles.push_back(change);
+        }
+        if (change.hasUnstaged() || change.isUntracked()) {
+            changeFiles.push_back(change);
+        }
+    }
+
+    QSignalBlocker treeBlocker(m_filesTree);
+    m_filesTree->clear();
+
+    const QFont sectionFont = headerFont(m_filesTree->font());
+
+    auto addSection = [&](const QString &title, const std::vector<WorkingTreeChange> &files,
+                          WorkingDiffScope scope) -> QTreeWidgetItem * {
+        if (files.empty()) {
+            return nullptr;
+        }
+        auto *section = new QTreeWidgetItem(m_filesTree);
+        section->setText(0, title);
+        section->setFont(0, sectionFont);
+        section->setData(0, KindRole, static_cast<int>(TreeItemKind::Header));
+        section->setFlags(Qt::ItemIsEnabled);
+        section->setExpanded(true);
+
+        for (const WorkingTreeChange &change : files) {
+            auto *fileItem = new QTreeWidgetItem(section);
+            fileItem->setText(0, fileLineText(change, scope));
+            fileItem->setData(0, KindRole, static_cast<int>(TreeItemKind::File));
+            fileItem->setData(0, PathRole, change.path);
+            fileItem->setData(0, ScopeRole, static_cast<int>(scope));
+            fileItem->setToolTip(
+                0, tr("Porcelain %1 — %2").arg(change.porcelainStatusDisplay(), change.path));
+            fileItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+        }
+        return section;
+    };
+
+    addSection(tr("Staged Changes (%1)").arg(stagedFiles.size()), stagedFiles,
+               WorkingDiffScope::Staged);
+    addSection(tr("Changes (%1)").arg(changeFiles.size()), changeFiles, WorkingDiffScope::Unstaged);
+
+    if (stagedFiles.empty() && changeFiles.empty()) {
+        auto *empty = new QTreeWidgetItem(m_filesTree);
+        empty->setText(0, tr("(no changes)"));
+        empty->setFlags(Qt::NoItemFlags);
+        m_summaryLabel->setText(tr("Working tree clean"));
+        showDiffText({}, tr("Diff"));
+        updateDiscardFileButton();
+        return;
+    }
+
+    m_summaryLabel->setText(tr("%1 staged, %2 changes")
+                                .arg(stagedFiles.size())
+                                .arg(changeFiles.size()));
+
+    QTreeWidgetItem *selectItem = nullptr;
+    const int topCount = m_filesTree->topLevelItemCount();
+    for (int i = 0; i < topCount; ++i) {
+        QTreeWidgetItem *section = m_filesTree->topLevelItem(i);
+        for (int j = 0; j < section->childCount(); ++j) {
+            QTreeWidgetItem *child = section->child(j);
+            if (child->data(0, KindRole).toInt() != static_cast<int>(TreeItemKind::File)) {
+                continue;
+            }
+            if (!previousPath.isEmpty() && child->data(0, PathRole).toString() == previousPath
+                && static_cast<WorkingDiffScope>(child->data(0, ScopeRole).toInt())
+                       == previousScope) {
+                selectItem = child;
+                break;
+            }
+        }
+        if (selectItem) {
+            break;
+        }
+    }
+
+    if (!selectItem) {
+        for (int i = 0; i < topCount; ++i) {
+            QTreeWidgetItem *section = m_filesTree->topLevelItem(i);
+            if (section->childCount() > 0) {
+                selectItem = section->child(0);
+                break;
+            }
+        }
+    }
+
+    if (selectItem) {
+        m_filesTree->setCurrentItem(selectItem);
+    }
+
+    updateDiscardFileButton();
+
+    if (selectedFileItem()) {
+        loadDiffForCurrentFile();
     }
 }
 
 void WorkingChangesPanel::onFileSelectionChanged()
 {
-    const int row = m_filesList->currentRow();
-    if (row >= 0 && row < static_cast<int>(m_changes.size())) {
-        applyBestScopeForChange(m_changes[static_cast<size_t>(row)]);
-    }
     loadDiffForCurrentFile();
     updateDiscardFileButton();
     emit fileSelectionChanged();
-}
-
-void WorkingChangesPanel::onScopeChanged()
-{
-    loadDiffForCurrentFile();
-}
-
-WorkingDiffScope WorkingChangesPanel::currentScope() const
-{
-    switch (m_scopeCombo->currentIndex()) {
-    case 1:
-        return WorkingDiffScope::Staged;
-    case 2:
-        return WorkingDiffScope::AgainstHead;
-    default:
-        return WorkingDiffScope::Unstaged;
-    }
 }
 
 void WorkingChangesPanel::loadDiffForCurrentFile()
@@ -343,103 +500,70 @@ void WorkingChangesPanel::loadDiffForCurrentFile()
         return;
     }
 
-    const QListWidgetItem *item = m_filesList->currentItem();
+    const QTreeWidgetItem *item = selectedFileItem();
     if (!item) {
         showDiffText({}, tr("Diff"));
         return;
     }
 
-    m_changes = m_git->workingTreeChanges(m_repoPath);
-
-    WorkingTreeChange change;
-    QString path;
-
-    const int row = m_filesList->currentRow();
-    if (row >= 0 && row < static_cast<int>(m_changes.size())) {
-        change = m_changes[static_cast<size_t>(row)];
-        path = change.path;
-    } else {
-        path = item->data(Qt::UserRole).toString();
-        if (path.isEmpty()) {
-            showDiffText({}, tr("Diff"));
-            return;
-        }
-        for (const WorkingTreeChange &candidate : m_changes) {
-            if (candidate.path == path) {
-                change = candidate;
-                path = change.path;
-                break;
-            }
-        }
-        if (change.path.isEmpty()) {
-            change.path = path;
-            const QString xy = item->data(Qt::UserRole + 1).toString();
-            if (xy.size() >= 2) {
-                change.indexStatus = xy.at(0);
-                change.workTreeStatus = xy.at(1);
-            }
-        }
-    }
-
+    const QString path = item->data(0, PathRole).toString();
     if (path.isEmpty()) {
         showDiffText({}, tr("Diff"));
         return;
     }
 
-    WorkingDiffScope scope = currentScope();
+    const WorkingTreeChange change = changeForPath(path);
+    const WorkingDiffScope scope = selectedItemScope();
+
     QString scopeLabel;
+    QString sectionLabel;
     switch (scope) {
     case WorkingDiffScope::Staged:
         scopeLabel = tr("staged");
+        sectionLabel = tr("Staged Changes");
         break;
     case WorkingDiffScope::AgainstHead:
         scopeLabel = tr("vs HEAD");
+        sectionLabel = tr("All vs HEAD");
         break;
     case WorkingDiffScope::Unstaged:
-        scopeLabel = tr("unstaged");
+        scopeLabel = tr("changes");
+        sectionLabel = tr("Changes");
         break;
     }
 
-    m_diffTitle->setText(tr("Diff (%1): %2").arg(scopeLabel, path));
+    m_diffTitle->setText(tr("%1 — %2").arg(sectionLabel, path));
 
-    QString diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
-
-    if (diff.isEmpty() && scope == WorkingDiffScope::Staged && change.hasUnstaged()
-        && !change.hasStaged()) {
-        scope = WorkingDiffScope::Unstaged;
-        scopeLabel = tr("unstaged");
-        m_diffTitle->setText(tr("Diff (%1): %2 — %3")
-                                 .arg(scopeLabel, path, tr("no staged changes")));
-        diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
-    }
+    const QString diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
 
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
         showDiffText(m_git->lastError(), m_diffTitle->text());
         return;
     }
 
-    if (diff.isEmpty() && scope == WorkingDiffScope::Staged && change.hasStaged()) {
-        diff = m_git->workingTreeFileDiff(m_repoPath, path, WorkingDiffScope::AgainstHead, change);
-        if (!diff.isEmpty()) {
-            scopeLabel = tr("vs HEAD");
-            m_diffTitle->setText(tr("Diff (%1): %2").arg(scopeLabel, path));
-        }
-    }
-
     if (diff.isEmpty()) {
+        const bool cachedStaged =
+            m_git && m_git->hasCachedDiffForPath(m_repoPath, path);
         QString hint = tr("No diff for \"%1\".").arg(scopeLabel);
-        if (!change.hasStaged() && change.hasUnstaged()) {
-            hint = tr("This file has only unstaged changes. Use \"Unstaged changes\" or \"All vs HEAD\".");
-        } else if (change.hasStaged() && !change.hasUnstaged()
-                   && scope == WorkingDiffScope::Unstaged) {
-            hint = tr("This file has only staged changes. Use \"Staged changes\" or \"All vs HEAD\".");
-        } else if (change.hasStaged() && change.hasUnstaged()) {
-            hint += QLatin1Char(' ') + tr("Try another scope from the list above.");
-        } else if (change.hasStaged() && scope == WorkingDiffScope::Staged) {
-            hint = tr("Staged changes are recorded but git returned an empty patch.");
+        if (scope == WorkingDiffScope::Staged && !cachedStaged) {
+            if (!change.hasStaged() && change.hasUnstaged()) {
+                hint = tr("This file has only unstaged changes. See the Changes section.");
+            } else if (change.hasStaged() && !change.hasUnstaged()) {
+                hint = tr("Git status shows staged, but there is no staged diff vs HEAD. "
+                          "Try: git add \"%1\"")
+                           .arg(path);
+            } else {
+                hint = tr("There is no staged diff for this file in the index.");
+            }
+        } else if (scope == WorkingDiffScope::Staged && cachedStaged) {
+            hint = tr("Staged diff exists but could not be loaded.");
+            if (!m_git->lastDiffCommand().isEmpty()) {
+                hint += QLatin1Char('\n') + tr("Try in terminal: %1").arg(m_git->lastDiffCommand());
+            }
         }
-        hint += QLatin1Char('\n') + tr("Git status: %1 — %2")
-                    .arg(change.statusLabel(), path);
+        hint += QLatin1Char('\n')
+                + tr("Porcelain %1 (%2) — %3")
+                      .arg(change.porcelainStatusDisplay(), change.statusDescription(), path);
         const QString cmd = m_git->lastDiffCommand();
         if (!cmd.isEmpty()) {
             hint += QLatin1Char('\n') + tr("Last command: %1").arg(cmd);

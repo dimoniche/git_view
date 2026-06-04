@@ -26,6 +26,8 @@ public:
 
     bool isRepository(const QString &path) const;
     QString discoverGitDir(const QString &path) const;
+    GitProcessResult initRepository(const QString &path,
+                                    const QString &initialBranch = {}) const;
 
     std::vector<Commit> logAll(const QString &repoPath, int maxCount = 500) const;
     std::vector<Commit> logBranch(const QString &repoPath,
@@ -86,6 +88,8 @@ public:
                            const QString &path) const;
 
     std::vector<WorkingTreeChange> workingTreeChanges(const QString &repoPath) const;
+    WorkingTreeChange changeForPath(const QString &repoPath, const QString &path) const;
+    bool hasCachedDiffForPath(const QString &repoPath, const QString &path) const;
     QString workingTreeFileDiff(const QString &repoPath,
                                 const QString &path,
                                 WorkingDiffScope scope,

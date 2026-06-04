@@ -67,6 +67,14 @@ QString unescapeGitQuotedPath(QString path)
     return QString::fromUtf8(bytes);
 }
 
+QString normalizePorcelainLine(QString line)
+{
+    if (line.endsWith(QLatin1Char('\r'))) {
+        line.chop(1);
+    }
+    return line;
+}
+
 QString normalizeGitPath(QString path)
 {
     path.remove(QLatin1Char('\r'));
