@@ -9,6 +9,7 @@ Built with **Qt 6** and the system **git** CLI.
 - C++17 compiler
 - Qt 6 Widgets (`qt6-base-dev` on Ubuntu)
 - Git 2.34+
+- macOS/Linux: POSIX PTY for the built-in terminal (bundled [libvterm](https://github.com/neovim/libvterm))
 
 ### Ubuntu
 
@@ -32,6 +33,10 @@ cmake --build build
 ```
 
 On macOS, pass `CMAKE_PREFIX_PATH` if Qt is not found automatically (see above).
+
+## Terminal
+
+The bottom panel is a **real interactive terminal** (PTY + VT100 emulator): you can run `git`, `vim`, `htop`, pagers, and full-screen programs. Working directory is the repository root. Press **Ctrl+`** to focus it.
 
 ## Tests
 

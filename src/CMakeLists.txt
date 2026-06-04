@@ -17,6 +17,8 @@ set(GIT_VIEW_SOURCES
     ui/WorkingChangesPanel.cpp
     ui/RemotesDialog.cpp
     ui/RepoTerminalPanel.cpp
+    ui/PtySession.cpp
+    ui/VtermTerminalWidget.cpp
     ui/DiffHighlighter.cpp
 )
 
@@ -25,5 +27,10 @@ add_executable(git_view ${GIT_VIEW_SOURCES})
 target_include_directories(git_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(git_view PRIVATE Qt6::Widgets)
+
+if(UNIX)
+    target_link_libraries(git_view PRIVATE libvterm)
+    target_compile_definitions(git_view PRIVATE GIT_VIEW_PTY_TERMINAL=1)
+endif()
 
 install(TARGETS git_view RUNTIME DESTINATION bin)
