@@ -63,6 +63,18 @@ bool stagedPathDiffers(const GitProcessRunner &runner,
     return result.exitCode == 1;
 }
 
+bool pathIsGitlink(const GitProcessRunner &runner,
+                 const QString &repoPath,
+                 const QString &path)
+{
+    const GitProcessResult result =
+        runner.run(repoPath, {QStringLiteral("ls-files"), QStringLiteral("-s"), QStringLiteral("--"), path});
+    if (!result.success() || result.stdoutText.trimmed().isEmpty()) {
+        return false;
+    }
+    return result.stdoutText.trimmed().startsWith(QStringLiteral("160000"));
+}
+
 constexpr const char kEmptyTreeHash[] = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 } // namespace
@@ -240,12 +252,39 @@ GitProcessResult GitService::discardFileChanges(const QString &repoPath,
         return result;
     }
 
+    const QString &primaryPath = paths.front();
+
     if (change.isUntracked()) {
-        QStringList args{QStringLiteral("clean"), QStringLiteral("-fd"), QStringLiteral("--")};
+        QStringList args{QStringLiteral("clean"), QStringLiteral("-ff"), QStringLiteral("-d"),
+                         QStringLiteral("--")};
         args.append(paths);
         const GitProcessResult result = m_runner.run(repoPath, args);
         if (!result.success()) {
             setError(QStringLiteral("git clean failed"), result);
+        }
+        return result;
+    }
+
+    if (pathIsGitlink(m_runner, repoPath, primaryPath)) {
+        const QString subRepoPath = QDir(repoPath).filePath(primaryPath);
+        if (isRepository(subRepoPath)) {
+            GitProcessResult subReset =
+                m_runner.run(subRepoPath, {QStringLiteral("reset"), QStringLiteral("--hard"),
+                                           QStringLiteral("HEAD")});
+            if (!subReset.success()) {
+                setError(QStringLiteral("git reset in nested repository failed"), subReset);
+                return subReset;
+            }
+            m_runner.run(subRepoPath, {QStringLiteral("clean"), QStringLiteral("-fd")});
+        }
+
+        QStringList restoreArgs{QStringLiteral("restore"), QStringLiteral("--source=HEAD"),
+                                QStringLiteral("--staged"), QStringLiteral("--worktree"),
+                                QStringLiteral("--")};
+        restoreArgs.append(paths);
+        const GitProcessResult result = m_runner.run(repoPath, restoreArgs);
+        if (!result.success()) {
+            setError(QStringLiteral("git restore failed"), result);
         }
         return result;
     }

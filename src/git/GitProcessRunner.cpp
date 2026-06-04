@@ -31,14 +31,14 @@ GitProcessResult GitProcessRunner::run(const QString &repoPath,
     if (!repoPath.isEmpty()) {
         command << QStringLiteral("-C") << repoPath;
     }
-    command << args;
+    command << QStringLiteral("-c") << QStringLiteral("core.quotepath=false") << args;
 
     QProcess process;
     process.setProcessChannelMode(QProcess::SeparateChannels);
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
-    env.insert(QStringLiteral("LANG"), QStringLiteral("C"));
+    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C.UTF-8"));
+    env.insert(QStringLiteral("LANG"), QStringLiteral("C.UTF-8"));
     env.insert(QStringLiteral("GIT_PAGER"), QString());
     process.setProcessEnvironment(env);
 

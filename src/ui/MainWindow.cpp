@@ -591,10 +591,11 @@ void MainWindow::discardFileChanges(const QString &path)
 
     QString actionText;
     if (change.isUntracked()) {
-        actionText = tr("Delete untracked file \"%1\"?").arg(path);
+        actionText = tr("Delete untracked path \"%1\"?").arg(path);
     } else {
-        actionText = tr("Discard all changes to \"%1\" (staged and unstaged) and restore the last committed version?")
-                           .arg(path);
+        actionText =
+            tr("Discard all changes to \"%1\" (staged and unstaged) and restore the last committed version?")
+                .arg(path);
     }
 
     const auto answer =
