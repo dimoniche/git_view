@@ -50,6 +50,8 @@ private slots:
     void deleteBranch(const Branch &branch);
     void publishBranch(const Branch &branch);
     void pushBranch(const Branch &branch);
+    bool pushBranchNoPrompt(const Branch &branch);
+    Branch currentLocalBranch() const;
     void pullBranch(const Branch &branch);
     void pullCurrentBranch();
     void publishOrPushSelectedBranch();

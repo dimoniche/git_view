@@ -615,6 +615,29 @@ void MainWindow::commitChanges()
     messageEdit->setMinimumHeight(140);
     layout->addWidget(messageEdit, 1);
 
+    const Branch currentBranch = currentLocalBranch();
+    const bool hasRemotes = !m_git.remotes(m_repo.path()).isEmpty();
+    const bool canPushAfterCommit = hasRemotes && currentBranch.hasUpstream();
+
+    QSettings settings;
+    auto *pushAfterCommitCheck =
+        new QCheckBox(tr("Push to upstream after commit"), &dialog);
+    pushAfterCommitCheck->setChecked(
+        settings.value(QStringLiteral("ui/pushAfterCommit"), false).toBool());
+    pushAfterCommitCheck->setEnabled(canPushAfterCommit);
+    if (!hasRemotes) {
+        pushAfterCommitCheck->setToolTip(
+            tr("Configure a remote (Repository → Configure remotes…) to enable push."));
+    } else if (!currentBranch.hasUpstream()) {
+        pushAfterCommitCheck->setToolTip(
+            tr("Publish the branch first (First publish…) to set an upstream."));
+    } else {
+        pushAfterCommitCheck->setToolTip(
+            tr("Runs git push %1 after a successful commit.")
+                .arg(currentBranch.upstream.section(QLatin1Char('/'), 0, 0)));
+    }
+    layout->addWidget(pushAfterCommitCheck);
+
     auto *buttons =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -650,10 +673,20 @@ void MainWindow::commitChanges()
         return;
     }
 
+    settings.setValue(QStringLiteral("ui/pushAfterCommit"), pushAfterCommitCheck->isChecked());
+
     const QString output = commitResult.stdoutText.trimmed();
-    QMessageBox::information(
-        this, tr("Commit"),
-        output.isEmpty() ? tr("Commit created successfully.") : output);
+    QString resultMessage =
+        output.isEmpty() ? tr("Commit created successfully.") : output;
+
+    if (pushAfterCommitCheck->isChecked()) {
+        if (pushBranchNoPrompt(currentBranch)) {
+            resultMessage += QLatin1Char('\n') + tr("Changes were pushed to %1.")
+                                                 .arg(currentBranch.upstream);
+        }
+    }
+
+    QMessageBox::information(this, tr("Commit"), resultMessage);
     refreshRepository();
 }
 
@@ -1234,6 +1267,54 @@ void MainWindow::publishBranch(const Branch &branch)
     refreshRepository();
 }
 
+Branch MainWindow::currentLocalBranch() const
+{
+    for (const Branch &branch : m_branches) {
+        if (branch.isCurrent && !branch.isRemote) {
+            return branch;
+        }
+    }
+
+    Branch fallback;
+    if (m_repo.isValid()) {
+        fallback.name = m_git.currentBranch(m_repo.path());
+        fallback.isCurrent = true;
+    }
+    return fallback;
+}
+
+bool MainWindow::pushBranchNoPrompt(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty() || branch.isRemote || !branch.hasUpstream()) {
+        return false;
+    }
+
+    QString remote;
+    const int slash = branch.upstream.indexOf(QLatin1Char('/'));
+    if (slash > 0) {
+        remote = branch.upstream.left(slash);
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remote.isEmpty() || !remoteList.contains(remote)) {
+        QMessageBox::critical(
+            this, tr("Push failed"),
+            tr("Cannot push: remote for upstream \"%1\" is not configured.")
+                .arg(branch.upstream));
+        return false;
+    }
+
+    const GitProcessResult result = m_git.pushBranch(m_repo.path(), branch.name, remote);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Push after commit failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return false;
+    }
+
+    return true;
+}
+
 void MainWindow::pushBranch(const Branch &branch)
 {
     if (!m_repo.isValid() || branch.name.isEmpty()) {
@@ -1285,37 +1366,24 @@ void MainWindow::pushBranch(const Branch &branch)
         return;
     }
 
-    const GitProcessResult result = m_git.pushBranch(m_repo.path(), branch.name, remote);
-    if (!result.success()) {
-        QMessageBox::critical(
-            this, tr("Push branch failed"),
-            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+    if (!pushBranchNoPrompt(branch)) {
         return;
     }
 
-    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
     QMessageBox::information(
         this, tr("Push branch"),
-        output.isEmpty() ? tr("Branch \"%1\" pushed to %2.").arg(branch.name, remote) : output);
+        tr("Branch \"%1\" pushed to %2.").arg(branch.name, remote));
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
 void MainWindow::pullCurrentBranch()
 {
-    for (const Branch &branch : m_branches) {
-        if (branch.isCurrent && !branch.isRemote) {
-            pullBranch(branch);
-            return;
-        }
-    }
-
-    const Branch fallback = branchForActions();
-    if (!fallback.name.isEmpty()) {
-        pullBranch(fallback);
+    const Branch branch = currentLocalBranch();
+    if (branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Pull"), tr("Open a repository with a local branch."));
         return;
     }
-
-    QMessageBox::information(this, tr("Pull"), tr("Open a repository with a local branch."));
+    pullBranch(branch);
 }
 
 void MainWindow::pullBranch(const Branch &branch)
@@ -1747,18 +1815,15 @@ void MainWindow::setStatusMessage(const QString &message)
 
     const BranchSyncCounts sync = m_git.currentBranchSyncCounts(m_repo.path());
     if (sync.valid && !sync.upstream.isEmpty()) {
-        if (sync.ahead == 0 && sync.behind == 0) {
-            extras << tr("in sync with %1").arg(sync.upstream);
+        if (sync.ahead == 0) {
+            extras << tr("no unpushed commits");
         } else {
-            QStringList parts;
-            if (sync.ahead > 0) {
-                parts << tr("%n commit(s) ahead", nullptr, sync.ahead);
-            }
-            if (sync.behind > 0) {
-                parts << tr("%n commit(s) behind", nullptr, sync.behind);
-            }
-            extras << parts.join(QStringLiteral(", ")) + QLatin1Char(' ') + sync.upstream;
+            extras << tr("%n unpushed commit(s)", nullptr, sync.ahead);
         }
+        if (sync.behind > 0) {
+            extras << tr("%n commit(s) behind", nullptr, sync.behind);
+        }
+        extras << sync.upstream;
     }
 
     if (extras.isEmpty()) {
