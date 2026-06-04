@@ -15,6 +15,7 @@ class QPushButton;
 class CommitHistoryView;
 class CommitDetailsPanel;
 class WorkingChangesPanel;
+class RepoTerminalPanel;
 class QScrollArea;
 class QTabWidget;
 class QSplitter;
@@ -67,6 +68,8 @@ private:
     void resetLayout();
     void applySplitterStyle(QSplitter *splitter);
     void showWorkingTreeTab();
+    void showTerminalPanel();
+    void toggleTerminalPanel(bool visible);
     void setRepository(const QString &path);
     void reloadBranches();
     void reloadLog(const QString &branchFilter = {});
@@ -101,7 +104,9 @@ private:
     QPushButton *m_remotesButton = nullptr;
     QPushButton *m_loadMoreButton = nullptr;
 
+    QSplitter *m_rootSplitter = nullptr;
     QSplitter *m_mainSplitter = nullptr;
+    RepoTerminalPanel *m_terminalPanel = nullptr;
     QWidget *m_branchPanel = nullptr;
     QWidget *m_detailsPanelContainer = nullptr;
 
@@ -112,4 +117,5 @@ private:
     QAction *m_discardFileAction = nullptr;
     QAction *m_publishBranchAction = nullptr;
     QAction *m_pullAction = nullptr;
+    QAction *m_toggleTerminalAction = nullptr;
 };

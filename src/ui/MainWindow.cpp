@@ -5,6 +5,7 @@
 #include "ui/CommitHistoryView.h"
 #include "ui/RemotesDialog.h"
 #include "ui/WorkingChangesPanel.h"
+#include "ui/RepoTerminalPanel.h"
 
 #include <QAction>
 #include <QCheckBox>
@@ -257,7 +258,19 @@ void MainWindow::setupUi()
     m_mainSplitter->setStretchFactor(2, 0);
     m_mainSplitter->setSizes({kDefaultBranchWidth, 700, kDefaultDetailsWidth});
 
-    rootLayout->addWidget(m_mainSplitter, 1);
+    m_rootSplitter = new QSplitter(Qt::Vertical, central);
+    applySplitterStyle(m_rootSplitter);
+    m_rootSplitter->addWidget(m_mainSplitter);
+
+    m_terminalPanel = new RepoTerminalPanel(central);
+    connect(m_terminalPanel, &RepoTerminalPanel::repositoryMayHaveChanged, this,
+            &MainWindow::refreshRepository);
+    m_rootSplitter->addWidget(m_terminalPanel);
+    m_rootSplitter->setStretchFactor(0, 1);
+    m_rootSplitter->setStretchFactor(1, 0);
+    m_rootSplitter->setSizes({560, 180});
+
+    rootLayout->addWidget(m_rootSplitter, 1);
 
     m_statusLabel = new QLabel(central);
     rootLayout->addWidget(m_statusLabel);
@@ -272,6 +285,18 @@ void MainWindow::setupUi()
     workingTabAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
     connect(workingTabAction, &QAction::triggered, this, &MainWindow::showWorkingTreeTab);
     viewMenu->addAction(workingTabAction);
+
+    m_toggleTerminalAction = new QAction(tr("Terminal"), this);
+    m_toggleTerminalAction->setCheckable(true);
+    m_toggleTerminalAction->setChecked(true);
+    m_toggleTerminalAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_T));
+    connect(m_toggleTerminalAction, &QAction::toggled, this, &MainWindow::toggleTerminalPanel);
+    viewMenu->addAction(m_toggleTerminalAction);
+
+    auto *focusTerminalAction = new QAction(tr("Focus terminal"), this);
+    focusTerminalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+`")));
+    connect(focusTerminalAction, &QAction::triggered, this, &MainWindow::showTerminalPanel);
+    viewMenu->addAction(focusTerminalAction);
 
     auto *focusHistoryAction = new QAction(tr("Focus commit history"), this);
     focusHistoryAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
@@ -353,11 +378,41 @@ void MainWindow::showWorkingTreeTab()
     }
 }
 
+void MainWindow::showTerminalPanel()
+{
+    if (m_toggleTerminalAction && !m_toggleTerminalAction->isChecked()) {
+        m_toggleTerminalAction->setChecked(true);
+    }
+    if (m_terminalPanel) {
+        m_terminalPanel->focusInput();
+    }
+}
+
+void MainWindow::toggleTerminalPanel(bool visible)
+{
+    if (!m_rootSplitter || !m_terminalPanel) {
+        return;
+    }
+
+    m_terminalPanel->setVisible(visible);
+    if (visible) {
+        QList<int> sizes = m_rootSplitter->sizes();
+        if (sizes.size() >= 2 && sizes.at(1) < 40) {
+            const int total = sizes.at(0) + sizes.at(1);
+            sizes[0] = qMax(200, total - 180);
+            sizes[1] = 180;
+            m_rootSplitter->setSizes(sizes);
+        }
+    }
+}
+
 void MainWindow::resetLayout()
 {
     QSettings settings;
     settings.remove(QStringLiteral("windowGeometry"));
     settings.remove(QStringLiteral("splitterState"));
+    settings.remove(QStringLiteral("rootSplitterState"));
+    settings.remove(QStringLiteral("terminalVisible"));
     settings.remove(QStringLiteral("windowState"));
     resize(1200, 800);
     if (m_toggleBranchesAction) {
@@ -368,6 +423,12 @@ void MainWindow::resetLayout()
     }
     if (m_mainSplitter) {
         m_mainSplitter->setSizes({kDefaultBranchWidth, 700, kDefaultDetailsWidth});
+    }
+    if (m_rootSplitter) {
+        m_rootSplitter->setSizes({560, 180});
+    }
+    if (m_toggleTerminalAction) {
+        m_toggleTerminalAction->setChecked(true);
     }
 }
 
@@ -383,6 +444,18 @@ void MainWindow::restoreWindowLayout()
     if (!splitterState.isEmpty() && m_mainSplitter) {
         m_mainSplitter->restoreState(splitterState);
     }
+
+    const QByteArray rootSplitterState =
+        settings.value(QStringLiteral("rootSplitterState")).toByteArray();
+    if (!rootSplitterState.isEmpty() && m_rootSplitter) {
+        m_rootSplitter->restoreState(rootSplitterState);
+    }
+
+    const bool terminalVisible = settings.value(QStringLiteral("terminalVisible"), true).toBool();
+    if (m_toggleTerminalAction) {
+        m_toggleTerminalAction->setChecked(terminalVisible);
+    }
+    toggleTerminalPanel(terminalVisible);
 
     const bool branchesVisible = settings.value(QStringLiteral("branchesVisible"), true).toBool();
     const bool detailsVisible = settings.value(QStringLiteral("detailsVisible"), true).toBool();
@@ -400,6 +473,12 @@ void MainWindow::saveWindowLayout()
     settings.setValue(QStringLiteral("windowGeometry"), saveGeometry());
     if (m_mainSplitter) {
         settings.setValue(QStringLiteral("splitterState"), m_mainSplitter->saveState());
+    }
+    if (m_rootSplitter) {
+        settings.setValue(QStringLiteral("rootSplitterState"), m_rootSplitter->saveState());
+    }
+    if (m_toggleTerminalAction) {
+        settings.setValue(QStringLiteral("terminalVisible"), m_toggleTerminalAction->isChecked());
     }
     if (m_toggleBranchesAction) {
         settings.setValue(QStringLiteral("branchesVisible"), m_toggleBranchesAction->isChecked());
@@ -547,6 +626,9 @@ void MainWindow::setRepository(const QString &path)
     m_repo.setPath(topLevel);
     m_detailsPanel->setRepoContext(topLevel, &m_git);
     m_workingPanel->setRepoContext(topLevel, &m_git);
+    if (m_terminalPanel) {
+        m_terminalPanel->setWorkingDirectory(topLevel);
+    }
     m_logLimit = kInitialLogLimit;
     m_branchFilter.clear();
     saveRecentRepo(topLevel);

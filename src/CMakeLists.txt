@@ -16,6 +16,7 @@ set(GIT_VIEW_SOURCES
     ui/CommitDetailsPanel.cpp
     ui/WorkingChangesPanel.cpp
     ui/RemotesDialog.cpp
+    ui/RepoTerminalPanel.cpp
     ui/DiffHighlighter.cpp
 )
 
