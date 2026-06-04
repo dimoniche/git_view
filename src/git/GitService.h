@@ -75,6 +75,9 @@ public:
     GitProcessResult pushBranch(const QString &repoPath,
                                 const QString &branchName,
                                 const QString &remote) const;
+    GitProcessResult pullBranch(const QString &repoPath,
+                                const QString &remote,
+                                const QString &branchName) const;
 
     GitProcessResult merge(const QString &repoPath,
                            const QString &branch,

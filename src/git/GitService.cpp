@@ -721,6 +721,33 @@ GitProcessResult GitService::pushBranch(const QString &repoPath,
     return result;
 }
 
+GitProcessResult GitService::pullBranch(const QString &repoPath,
+                                        const QString &remote,
+                                        const QString &branchName) const
+{
+    m_lastError.clear();
+
+    const QString trimmedRemote = remote.trimmed();
+    const QString trimmedBranch = branchName.trimmed();
+    if (trimmedRemote.isEmpty()) {
+        m_lastError = QStringLiteral("Remote name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    QStringList args{QStringLiteral("pull"), trimmedRemote};
+    if (!trimmedBranch.isEmpty()) {
+        args << trimmedBranch;
+    }
+
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git pull failed"), result);
+    }
+    return result;
+}
+
 GitProcessResult GitService::commit(const QString &repoPath, const QString &message) const
 {
     m_lastError.clear();

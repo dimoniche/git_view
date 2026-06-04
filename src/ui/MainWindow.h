@@ -50,6 +50,8 @@ private slots:
     void deleteBranch(const Branch &branch);
     void publishBranch(const Branch &branch);
     void pushBranch(const Branch &branch);
+    void pullBranch(const Branch &branch);
+    void pullCurrentBranch();
     void publishOrPushSelectedBranch();
     void configureRemotes();
     void showBranchContextMenu(const QPoint &pos);
@@ -92,6 +94,7 @@ private:
     QScrollArea *m_historyScroll = nullptr;
     QPushButton *m_createBranchButton = nullptr;
     QPushButton *m_publishBranchButton = nullptr;
+    QPushButton *m_pullButton = nullptr;
     QPushButton *m_mergeButton = nullptr;
     QPushButton *m_remotesButton = nullptr;
     QPushButton *m_loadMoreButton = nullptr;
@@ -106,4 +109,5 @@ private:
     QAction *m_discardAllAction = nullptr;
     QAction *m_discardFileAction = nullptr;
     QAction *m_publishBranchAction = nullptr;
+    QAction *m_pullAction = nullptr;
 };

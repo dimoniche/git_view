@@ -71,6 +71,17 @@ void MainWindow::setupUi()
     refreshAction->setShortcut(QKeySequence::Refresh);
     connect(refreshAction, &QAction::triggered, this, &MainWindow::refreshRepository);
 
+    m_publishBranchAction = new QAction(tr("First publish…"), this);
+    m_publishBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
+    m_publishBranchAction->setEnabled(false);
+    connect(m_publishBranchAction, &QAction::triggered, this,
+            &MainWindow::publishOrPushSelectedBranch);
+
+    m_pullAction = new QAction(tr("Pull…"), this);
+    m_pullAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
+    m_pullAction->setEnabled(false);
+    connect(m_pullAction, &QAction::triggered, this, [this]() { pullCurrentBranch(); });
+
     auto *fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(newRepoAction);
     fileMenu->addAction(openAction);
@@ -84,6 +95,7 @@ void MainWindow::setupUi()
     toolbar->addAction(openAction);
     toolbar->addAction(refreshAction);
     toolbar->addAction(m_publishBranchAction);
+    toolbar->addAction(m_pullAction);
     toolbar->addSeparator();
 
     m_toggleBranchesAction = toolbar->addAction(tr("Branches"));
@@ -107,12 +119,6 @@ void MainWindow::setupUi()
     newBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
     connect(newBranchAction, &QAction::triggered, this, [this]() { createBranch(); });
 
-    m_publishBranchAction = new QAction(tr("First publish…"), this);
-    m_publishBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
-    m_publishBranchAction->setEnabled(false);
-    connect(m_publishBranchAction, &QAction::triggered, this,
-            &MainWindow::publishOrPushSelectedBranch);
-
     m_discardAllAction = new QAction(tr("Discard all changes…"), this);
     m_discardAllAction->setEnabled(false);
     connect(m_discardAllAction, &QAction::triggered, this, &MainWindow::discardAllChanges);
@@ -133,6 +139,7 @@ void MainWindow::setupUi()
     repoMenu->addAction(newBranchAction);
     repoMenu->addAction(configureRemotesAction);
     repoMenu->addAction(m_publishBranchAction);
+    repoMenu->addAction(m_pullAction);
     repoMenu->addAction(m_commitAction);
     repoMenu->addSeparator();
     repoMenu->addAction(m_discardFileAction);
@@ -180,6 +187,12 @@ void MainWindow::setupUi()
     connect(m_publishBranchButton, &QPushButton::clicked, this,
             &MainWindow::publishOrPushSelectedBranch);
     branchLayout->addWidget(m_publishBranchButton);
+
+    m_pullButton = new QPushButton(tr("Pull…"), m_branchPanel);
+    m_pullButton->setEnabled(false);
+    m_pullButton->setToolTip(tr("Fetch and merge from the branch's upstream (git pull)"));
+    connect(m_pullButton, &QPushButton::clicked, this, &MainWindow::pullCurrentBranch);
+    branchLayout->addWidget(m_pullButton);
 
     m_mergeButton = new QPushButton(tr("Merge into current…"), m_branchPanel);
     m_mergeButton->setEnabled(false);
@@ -903,6 +916,29 @@ void MainWindow::updateBranchActions()
             m_publishBranchAction->setEnabled(false);
         }
     }
+
+    Branch currentBranch;
+    for (const Branch &candidate : m_branches) {
+        if (candidate.isCurrent && !candidate.isRemote) {
+            currentBranch = candidate;
+            break;
+        }
+    }
+    const bool canPull =
+        repoOpen && hasRemotes && !currentBranch.name.isEmpty();
+    if (m_pullButton) {
+        m_pullButton->setEnabled(canPull);
+        if (currentBranch.hasUpstream()) {
+            m_pullButton->setToolTip(
+                tr("Pull from %1 (git pull)").arg(currentBranch.upstream));
+        } else {
+            m_pullButton->setToolTip(
+                tr("Pull current branch \"%1\" from a remote").arg(currentBranch.name));
+        }
+    }
+    if (m_pullAction) {
+        m_pullAction->setEnabled(canPull);
+    }
 }
 
 void MainWindow::configureRemotes()
@@ -1264,6 +1300,119 @@ void MainWindow::pushBranch(const Branch &branch)
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
+void MainWindow::pullCurrentBranch()
+{
+    for (const Branch &branch : m_branches) {
+        if (branch.isCurrent && !branch.isRemote) {
+            pullBranch(branch);
+            return;
+        }
+    }
+
+    const Branch fallback = branchForActions();
+    if (!fallback.name.isEmpty()) {
+        pullBranch(fallback);
+        return;
+    }
+
+    QMessageBox::information(this, tr("Pull"), tr("Open a repository with a local branch."));
+}
+
+void MainWindow::pullBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Pull"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Pull"),
+                                 tr("Select a local branch to pull into."));
+        return;
+    }
+
+    const QString current = m_git.currentBranch(m_repo.path());
+    if (!branch.isCurrent && branch.name != current) {
+        QMessageBox::information(
+            this, tr("Pull"),
+            tr("Pull updates the current branch.\n"
+               "Checkout \"%1\" first (current branch is \"%2\").")
+                .arg(branch.name, current));
+        return;
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Pull"),
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
+        return;
+    }
+
+    QString remote;
+    QString remoteBranch;
+    if (branch.hasUpstream()) {
+        const int slash = branch.upstream.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            remote = branch.upstream.left(slash);
+            remoteBranch = branch.upstream.mid(slash + 1);
+        }
+    }
+
+    if (remote.isEmpty() || !remoteList.contains(remote) || remoteBranch.isEmpty()) {
+        remote = pickRemoteForBranch(branch, tr("Pull branch"));
+        if (remote.isEmpty()) {
+            return;
+        }
+        remoteBranch = branch.name;
+    } else if (remoteList.size() > 1 && !remoteList.contains(remote)) {
+        remote = pickRemoteForBranch(branch, tr("Pull branch"));
+        if (remote.isEmpty()) {
+            return;
+        }
+        remoteBranch = branch.name;
+    }
+
+    if (m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto answer = QMessageBox::warning(
+            this, tr("Pull"),
+            tr("The working tree has uncommitted changes. Pull may create merge conflicts.\n\n"
+               "Continue with pull from %1/%2 into \"%3\"?")
+                .arg(remote, remoteBranch, branch.name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    } else {
+        const auto answer = QMessageBox::question(
+            this, tr("Pull"),
+            tr("Pull from %1/%2 into \"%3\"?\n\n"
+               "This runs: git pull %1 %2")
+                .arg(remote, remoteBranch, branch.name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    const GitProcessResult result =
+        m_git.pullBranch(m_repo.path(), remote, remoteBranch);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Pull failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    QMessageBox::information(
+        this, tr("Pull"),
+        output.isEmpty()
+            ? tr("Branch \"%1\" is up to date with %2/%3.").arg(branch.name, remote, remoteBranch)
+            : output);
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
 void MainWindow::checkoutBranch(const Branch &branch)
 {
     if (!m_repo.isValid() || branch.name.isEmpty()) {
@@ -1334,8 +1483,10 @@ void MainWindow::showBranchContextMenu(const QPoint &pos)
 
     if (!branch.isRemote) {
         if (branch.hasUpstream()) {
+            menu.addAction(tr("Pull branch…"), this, [this, branch]() { pullBranch(branch); });
             menu.addAction(tr("Push branch…"), this, [this, branch]() { pushBranch(branch); });
         } else {
+            menu.addAction(tr("Pull branch…"), this, [this, branch]() { pullBranch(branch); });
             menu.addAction(tr("First publish…"), this,
                            [this, branch]() { publishBranch(branch); });
         }
