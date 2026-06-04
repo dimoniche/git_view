@@ -1734,5 +1734,37 @@ void MainWindow::saveRecentRepo(const QString &path)
 
 void MainWindow::setStatusMessage(const QString &message)
 {
-    m_statusLabel->setText(message);
+    if (!m_repo.isValid()) {
+        m_statusLabel->setText(message);
+        return;
+    }
+
+    QStringList extras;
+    const QString branch = m_git.currentBranch(m_repo.path());
+    if (!branch.isEmpty()) {
+        extras << branch;
+    }
+
+    const BranchSyncCounts sync = m_git.currentBranchSyncCounts(m_repo.path());
+    if (sync.valid && !sync.upstream.isEmpty()) {
+        if (sync.ahead == 0 && sync.behind == 0) {
+            extras << tr("in sync with %1").arg(sync.upstream);
+        } else {
+            QStringList parts;
+            if (sync.ahead > 0) {
+                parts << tr("%n commit(s) ahead", nullptr, sync.ahead);
+            }
+            if (sync.behind > 0) {
+                parts << tr("%n commit(s) behind", nullptr, sync.behind);
+            }
+            extras << parts.join(QStringLiteral(", ")) + QLatin1Char(' ') + sync.upstream;
+        }
+    }
+
+    if (extras.isEmpty()) {
+        m_statusLabel->setText(message);
+        return;
+    }
+
+    m_statusLabel->setText(message + QStringLiteral(" — ") + extras.join(QStringLiteral(" — ")));
 }

@@ -14,6 +14,13 @@ struct GitError {
     QString message;
 };
 
+struct BranchSyncCounts {
+    int ahead = 0;
+    int behind = 0;
+    QString upstream;
+    bool valid = false;
+};
+
 enum class WorkingDiffScope {
     Unstaged,
     Staged,
@@ -35,6 +42,7 @@ public:
                                   int maxCount = 500) const;
     std::vector<Branch> branches(const QString &repoPath) const;
     QString currentBranch(const QString &repoPath) const;
+    BranchSyncCounts currentBranchSyncCounts(const QString &repoPath) const;
     bool hasUncommittedChanges(const QString &repoPath) const;
     bool hasStagedChanges(const QString &repoPath) const;
 

@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
+#include <QRegularExpression>
 
 namespace {
 
@@ -236,6 +237,76 @@ QString GitService::currentBranch(const QString &repoPath) const
         return head.stdoutText.trimmed();
     }
     return {};
+}
+
+BranchSyncCounts GitService::currentBranchSyncCounts(const QString &repoPath) const
+{
+    BranchSyncCounts counts;
+
+    const QString branch = currentBranch(repoPath);
+    if (branch.isEmpty() || branch == QLatin1String("HEAD")) {
+        return counts;
+    }
+
+    auto parseCountLine = [](const QString &text, BranchSyncCounts *out) -> bool {
+        const QStringList parts =
+            text.trimmed().split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+        if (parts.size() < 2) {
+            return false;
+        }
+        bool behindOk = false;
+        bool aheadOk = false;
+        const int behind = parts.at(0).toInt(&behindOk);
+        const int ahead = parts.at(1).toInt(&aheadOk);
+        if (!behindOk || !aheadOk) {
+            return false;
+        }
+        out->behind = behind;
+        out->ahead = ahead;
+        out->valid = true;
+        return true;
+    };
+
+    const QStringList revListBase{QStringLiteral("rev-list"), QStringLiteral("--left-right"),
+                                  QStringLiteral("--count")};
+
+    const GitProcessResult upstreamRef = m_runner.run(
+        repoPath, {QStringLiteral("rev-parse"), QStringLiteral("--abbrev-ref"), QStringLiteral("@{u}")});
+
+    QString compareSpec = QStringLiteral("@{u}...HEAD");
+    if (upstreamRef.success()) {
+        counts.upstream = upstreamRef.stdoutText.trimmed();
+    }
+
+    GitProcessResult range =
+        m_runner.run(repoPath, revListBase + QStringList{compareSpec});
+    if (range.success() && parseCountLine(range.stdoutText, &counts)) {
+        return counts;
+    }
+
+    counts = BranchSyncCounts{};
+    const QString remote = defaultRemote(repoPath);
+    if (remote.isEmpty()) {
+        return counts;
+    }
+
+    const QString remoteBranch = remote + QLatin1Char('/') + branch;
+    const GitProcessResult verify = m_runner.run(
+        repoPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                   QStringLiteral("refs/remotes/") + remoteBranch});
+    if (!verify.success()) {
+        return counts;
+    }
+
+    compareSpec = remoteBranch + QStringLiteral("...HEAD");
+    range = m_runner.run(repoPath, revListBase + QStringList{compareSpec});
+    if (!range.success() || !parseCountLine(range.stdoutText, &counts)) {
+        counts = BranchSyncCounts{};
+        return counts;
+    }
+
+    counts.upstream = remoteBranch;
+    return counts;
 }
 
 bool GitService::hasUncommittedChanges(const QString &repoPath) const
