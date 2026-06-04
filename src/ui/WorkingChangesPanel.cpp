@@ -6,6 +6,8 @@
 
 #include <QComboBox>
 #include <QFileInfo>
+#include <QHBoxLayout>
+#include <QMenu>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QFont>
@@ -13,23 +15,62 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPlainTextEdit>
+#include <QSizePolicy>
 #include <QSplitter>
 #include <QVBoxLayout>
+
+namespace {
+
+void makeCompactToolButton(QPushButton *button)
+{
+    QFont font = button->font();
+    if (font.pointSize() > 0) {
+        font.setPointSize(qMax(9, font.pointSize() - 1));
+    } else if (font.pixelSize() > 0) {
+        font.setPixelSize(qMax(11, font.pixelSize() - 2));
+    }
+    button->setFont(font);
+    const int height = QFontMetrics(font).height() + 6;
+    button->setFixedHeight(height);
+    button->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+}
+
+} // namespace
 
 WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
     : QWidget(parent)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(4);
 
     m_summaryLabel = new QLabel(this);
     m_summaryLabel->setWordWrap(true);
     layout->addWidget(m_summaryLabel);
 
-    m_commitButton = new QPushButton(tr("Commit changes…"), this);
+    auto *actionsRow = new QHBoxLayout();
+    actionsRow->setSpacing(4);
+
+    m_commitButton = new QPushButton(tr("Commit…"), this);
     m_commitButton->setEnabled(false);
     connect(m_commitButton, &QPushButton::clicked, this, &WorkingChangesPanel::commitRequested);
-    layout->addWidget(m_commitButton);
+    makeCompactToolButton(m_commitButton);
+    actionsRow->addWidget(m_commitButton);
+
+    m_discardFileButton = new QPushButton(tr("Discard file…"), this);
+    m_discardFileButton->setEnabled(false);
+    connect(m_discardFileButton, &QPushButton::clicked, this,
+            &WorkingChangesPanel::onDiscardFileClicked);
+    makeCompactToolButton(m_discardFileButton);
+    actionsRow->addWidget(m_discardFileButton);
+
+    m_discardAllButton = new QPushButton(tr("Discard all…"), this);
+    m_discardAllButton->setEnabled(false);
+    connect(m_discardAllButton, &QPushButton::clicked, this, &WorkingChangesPanel::onDiscardAllClicked);
+    makeCompactToolButton(m_discardAllButton);
+    actionsRow->addWidget(m_discardAllButton);
+    actionsRow->addStretch(1);
+    layout->addLayout(actionsRow);
 
     m_scopeCombo = new QComboBox(this);
     m_scopeCombo->addItem(tr("Unstaged changes"), static_cast<int>(WorkingDiffScope::Unstaged));
@@ -48,8 +89,11 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
 
     m_filesList = new QListWidget(filesWidget);
     m_filesList->setMinimumHeight(80);
+    m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_filesList, &QListWidget::currentRowChanged, this,
             &WorkingChangesPanel::onFileSelectionChanged);
+    connect(m_filesList, &QWidget::customContextMenuRequested, this,
+            &WorkingChangesPanel::showFilesContextMenu);
     filesLayout->addWidget(m_filesList);
 
     splitter->addWidget(filesWidget);
@@ -101,6 +145,100 @@ void WorkingChangesPanel::setCommitEnabled(bool enabled)
     if (m_commitButton) {
         m_commitButton->setEnabled(enabled);
     }
+    if (m_discardAllButton) {
+        m_discardAllButton->setEnabled(enabled);
+    }
+    updateDiscardFileButton();
+}
+
+void WorkingChangesPanel::updateDiscardFileButton()
+{
+    if (!m_discardFileButton) {
+        return;
+    }
+    const bool hasRepo = m_git && !m_repoPath.isEmpty();
+    const int row = m_filesList ? m_filesList->currentRow() : -1;
+    const bool hasFile =
+        hasRepo && row >= 0 && row < static_cast<int>(m_changes.size()) && !m_changes.empty();
+    m_discardFileButton->setEnabled(hasFile && m_discardAllButton && m_discardAllButton->isEnabled());
+}
+
+void WorkingChangesPanel::onDiscardFileClicked()
+{
+    const int row = m_filesList->currentRow();
+    if (row < 0 || row >= static_cast<int>(m_changes.size())) {
+        return;
+    }
+    emit discardFileRequested(m_changes[static_cast<size_t>(row)].path);
+}
+
+void WorkingChangesPanel::onDiscardAllClicked()
+{
+    emit discardAllRequested();
+}
+
+QString WorkingChangesPanel::selectedFilePath() const
+{
+    const int row = m_filesList ? m_filesList->currentRow() : -1;
+    if (row < 0 || row >= static_cast<int>(m_changes.size())) {
+        return {};
+    }
+    return m_changes[static_cast<size_t>(row)].path;
+}
+
+bool WorkingChangesPanel::hasSelectedChange() const
+{
+    const int row = m_filesList ? m_filesList->currentRow() : -1;
+    return row >= 0 && row < static_cast<int>(m_changes.size()) && !m_changes.empty();
+}
+
+void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+
+    QListWidgetItem *item = m_filesList->itemAt(pos);
+    const int row = item ? m_filesList->row(item) : -1;
+    const bool hasChange =
+        row >= 0 && row < static_cast<int>(m_changes.size()) && !m_changes.empty();
+
+    if (hasChange) {
+        m_filesList->setCurrentRow(row);
+        const WorkingTreeChange &change = m_changes[static_cast<size_t>(row)];
+
+        QAction *discardFileAction =
+            menu.addAction(tr("Discard file changes…"), this, &WorkingChangesPanel::onDiscardFileClicked);
+        discardFileAction->setEnabled(m_discardFileButton && m_discardFileButton->isEnabled());
+
+        QMenu *diffMenu = menu.addMenu(tr("Show diff"));
+        if (change.hasUnstaged() || change.isUntracked()) {
+            diffMenu->addAction(tr("Unstaged changes"), this, [this]() {
+                m_scopeCombo->setCurrentIndex(0);
+                loadDiffForCurrentFile();
+            });
+        }
+        if (change.hasStaged()) {
+            diffMenu->addAction(tr("Staged changes"), this, [this]() {
+                m_scopeCombo->setCurrentIndex(1);
+                loadDiffForCurrentFile();
+            });
+        }
+        diffMenu->addAction(tr("All vs HEAD"), this, [this]() {
+            m_scopeCombo->setCurrentIndex(2);
+            loadDiffForCurrentFile();
+        });
+
+        menu.addSeparator();
+    }
+
+    QAction *commitAction =
+        menu.addAction(tr("Commit changes…"), this, [this]() { emit commitRequested(); });
+    commitAction->setEnabled(m_commitButton && m_commitButton->isEnabled());
+
+    QAction *discardAllAction =
+        menu.addAction(tr("Discard all changes…"), this, &WorkingChangesPanel::onDiscardAllClicked);
+    discardAllAction->setEnabled(m_discardAllButton && m_discardAllButton->isEnabled());
+
+    menu.exec(m_filesList->mapToGlobal(pos));
 }
 
 void WorkingChangesPanel::refresh()
@@ -110,6 +248,7 @@ void WorkingChangesPanel::refresh()
     if (!m_git || m_repoPath.isEmpty()) {
         m_summaryLabel->setText(tr("Open a repository"));
         showDiffText({}, tr("Diff"));
+        updateDiscardFileButton();
         return;
     }
 
@@ -141,6 +280,7 @@ void WorkingChangesPanel::refresh()
         m_summaryLabel->setText(tr("Working tree clean — no uncommitted changes"));
         m_filesList->addItem(tr("(no changes)"));
         showDiffText({}, tr("Diff"));
+        updateDiscardFileButton();
         return;
     }
 
@@ -150,6 +290,8 @@ void WorkingChangesPanel::refresh()
                                 .arg(unstagedCount));
 
     m_filesList->setCurrentRow(0);
+    updateDiscardFileButton();
+    emit fileSelectionChanged();
 }
 
 void WorkingChangesPanel::applyBestScopeForChange(const WorkingTreeChange &change)
@@ -173,6 +315,8 @@ void WorkingChangesPanel::onFileSelectionChanged()
         applyBestScopeForChange(m_changes[static_cast<size_t>(row)]);
     }
     loadDiffForCurrentFile();
+    updateDiscardFileButton();
+    emit fileSelectionChanged();
 }
 
 void WorkingChangesPanel::onScopeChanged()

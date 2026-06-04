@@ -23,6 +23,7 @@ public:
 
 private slots:
     void onFileSelectionChanged();
+    void showFilesContextMenu(const QPoint &pos);
 
 private:
     void loadDiffForCurrentFile();

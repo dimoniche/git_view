@@ -35,8 +35,8 @@ void TestLiveStaged::readmeStagedInGitViewRepo()
             git.workingTreeFileDiff(repo, change.path, WorkingDiffScope::Staged, change);
         QVERIFY2(!patch.isEmpty(), qPrintable(git.lastError() + QLatin1Char('\n')
                                               + git.lastDiffCommand()));
-        QVERIFY(patch.contains(QStringLiteral("diff --git"))
-                || patch.contains(QStringLiteral("(staged)")));
+        QVERIFY(patch.contains(QStringLiteral("diff --git")));
+        QVERIFY(patch.contains(QLatin1Char('+')) || patch.contains(QLatin1Char('-')));
     }
     QVERIFY2(found, "README.md not in working tree changes");
 }

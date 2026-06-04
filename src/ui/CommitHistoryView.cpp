@@ -1,8 +1,12 @@
 #include "ui/CommitHistoryView.h"
 
 #include <QColor>
+#include <QContextMenuEvent>
 #include <QFont>
 #include <QFontMetrics>
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
@@ -234,18 +238,82 @@ void CommitHistoryView::paintEvent(QPaintEvent *event)
     }
 }
 
-void CommitHistoryView::mousePressEvent(QMouseEvent *event)
+void CommitHistoryView::selectRow(int row)
 {
-    const int row = rowAtY(static_cast<int>(event->position().y()));
-    if (row < 0 || row >= static_cast<int>(m_commits.size())) {
-        return;
-    }
-    if (row == m_selectedRow) {
+    if (row < 0 || row >= static_cast<int>(m_commits.size()) || row == m_selectedRow) {
         return;
     }
     m_selectedRow = row;
     update();
     emit commitSelected(m_commits[static_cast<size_t>(row)].hash);
+}
+
+void CommitHistoryView::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::RightButton) {
+        const int row = rowAtY(static_cast<int>(event->position().y()));
+        if (row >= 0 && row < static_cast<int>(m_commits.size())) {
+            selectRow(row);
+            showCommitContextMenu(row, event->globalPosition().toPoint());
+        }
+        return;
+    }
+
+    if (event->button() != Qt::LeftButton) {
+        return;
+    }
+
+    const int row = rowAtY(static_cast<int>(event->position().y()));
+    if (row < 0 || row >= static_cast<int>(m_commits.size())) {
+        return;
+    }
+    selectRow(row);
+}
+
+void CommitHistoryView::contextMenuEvent(QContextMenuEvent *event)
+{
+    const int row = rowAtY(event->pos().y());
+    if (row < 0 || row >= static_cast<int>(m_commits.size())) {
+        return;
+    }
+    selectRow(row);
+    showCommitContextMenu(row, event->globalPos());
+}
+
+void CommitHistoryView::showCommitContextMenu(int row, const QPoint &globalPos)
+{
+    const Commit &commit = m_commits[static_cast<size_t>(row)];
+
+    QMenu menu(this);
+
+    menu.addAction(tr("Show commit details"), this, [this, commit]() {
+        emit viewCommitDetailsRequested(commit.hash);
+    });
+
+    menu.addSeparator();
+
+    menu.addAction(tr("Copy full hash"), this, [commit]() {
+        if (QClipboard *clipboard = QGuiApplication::clipboard()) {
+            clipboard->setText(commit.hash);
+        }
+    });
+    menu.addAction(tr("Copy short hash"), this, [commit]() {
+        if (QClipboard *clipboard = QGuiApplication::clipboard()) {
+            clipboard->setText(commit.hash.left(8));
+        }
+    });
+    menu.addAction(tr("Copy subject"), this, [commit]() {
+        if (QClipboard *clipboard = QGuiApplication::clipboard()) {
+            clipboard->setText(commit.subject);
+        }
+    });
+
+    menu.addSeparator();
+    menu.addAction(tr("Create branch from commit…"), this, [this, commit]() {
+        emit createBranchFromCommitRequested(commit.hash);
+    });
+
+    menu.exec(globalPos);
 }
 
 int CommitHistoryView::rowAtY(int y) const

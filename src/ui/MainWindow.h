@@ -2,6 +2,8 @@
 
 #include "core/Branch.h"
 #include "core/Repo.h"
+
+#include <QPoint>
 #include "git/GitService.h"
 
 #include <QMainWindow>
@@ -33,13 +35,18 @@ private slots:
     void refreshRepository();
     void onBranchSelected(int row);
     void mergeSelectedBranch();
-    void createBranch();
+    void createBranch(const QString &startPointHint = {});
+    void focusCommitDetails(const QString &hash);
     void loadMoreCommits();
     void onCommitSelected(const QString &hash);
     void toggleBranchesPanel(bool visible);
     void toggleDetailsPanel(bool visible);
     void focusHistoryPanel();
     void commitChanges();
+    void discardAllChanges();
+    void discardFileChanges(const QString &path);
+    void checkoutBranch(const Branch &branch);
+    void showBranchContextMenu(const QPoint &pos);
 
 private:
     void setupUi();
@@ -55,6 +62,7 @@ private:
     void reloadLog(const QString &branchFilter = {});
     void showCommitDetails(const QString &hash);
     void refreshWorkingTree();
+    void updateWorkingTreeActions();
     void updateRepoLabel();
     void setStatusMessage(const QString &message);
     Branch branchAtRow(int row) const;
@@ -84,4 +92,6 @@ private:
     QAction *m_toggleBranchesAction = nullptr;
     QAction *m_toggleDetailsAction = nullptr;
     QAction *m_commitAction = nullptr;
+    QAction *m_discardAllAction = nullptr;
+    QAction *m_discardFileAction = nullptr;
 };

@@ -4,8 +4,11 @@
 #include "ui/DiffHighlighter.h"
 
 #include <QFont>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -30,8 +33,11 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
 
     m_filesList = new QListWidget(filesWidget);
     m_filesList->setMinimumHeight(80);
+    m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_filesList, &QListWidget::currentRowChanged, this,
             &CommitDetailsPanel::onFileSelectionChanged);
+    connect(m_filesList, &QWidget::customContextMenuRequested, this,
+            &CommitDetailsPanel::showFilesContextMenu);
     filesLayout->addWidget(m_filesList);
 
     splitter->addWidget(filesWidget);
@@ -120,6 +126,29 @@ void CommitDetailsPanel::clear()
 void CommitDetailsPanel::onFileSelectionChanged()
 {
     loadDiffForCurrentFile();
+}
+
+void CommitDetailsPanel::showFilesContextMenu(const QPoint &pos)
+{
+    QListWidgetItem *item = m_filesList->itemAt(pos);
+    if (!item) {
+        return;
+    }
+
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+
+    m_filesList->setCurrentRow(m_filesList->row(item));
+
+    QMenu menu(this);
+    menu.addAction(tr("Copy path"), this, [path]() {
+        if (QClipboard *clipboard = QGuiApplication::clipboard()) {
+            clipboard->setText(path);
+        }
+    });
+    menu.exec(m_filesList->mapToGlobal(pos));
 }
 
 void CommitDetailsPanel::loadDiffForCurrentFile()

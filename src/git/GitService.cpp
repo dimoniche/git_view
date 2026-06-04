@@ -53,15 +53,14 @@ QStringList pathsForStagedDiff(const GitProcessRunner &runner,
     return uniquePaths(paths);
 }
 
-QString formatStagedShowFallback(const QString &path, const QString &headText, const QString &stagedText)
+bool stagedPathDiffers(const GitProcessRunner &runner,
+                     const QString &repoPath,
+                     const QString &path)
 {
-    QStringList lines;
-    lines << QStringLiteral("--- ") + path + QStringLiteral(" (HEAD)");
-    lines << QStringLiteral("+++ ") + path + QStringLiteral(" (staged)");
-    lines << headText;
-    lines << QStringLiteral("---");
-    lines << stagedText;
-    return lines.join(QLatin1Char('\n'));
+    const GitProcessResult result =
+        runner.run(repoPath, {QStringLiteral("diff"), QStringLiteral("--cached"),
+                              QStringLiteral("--quiet"), QStringLiteral("--"), path});
+    return result.exitCode == 1;
 }
 
 constexpr const char kEmptyTreeHash[] = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -205,6 +204,58 @@ GitProcessResult GitService::stageAll(const QString &repoPath) const
     const GitProcessResult result = m_runner.run(repoPath, {QStringLiteral("add"), QStringLiteral("-A")});
     if (!result.success()) {
         setError(QStringLiteral("git add failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::discardAllChanges(const QString &repoPath) const
+{
+    m_lastError.clear();
+
+    const GitProcessResult reset =
+        m_runner.run(repoPath, {QStringLiteral("reset"), QStringLiteral("--hard"), QStringLiteral("HEAD")});
+    if (!reset.success()) {
+        setError(QStringLiteral("git reset --hard failed"), reset);
+        return reset;
+    }
+
+    const GitProcessResult clean =
+        m_runner.run(repoPath, {QStringLiteral("clean"), QStringLiteral("-fd")});
+    if (!clean.success()) {
+        setError(QStringLiteral("git clean failed"), clean);
+    }
+    return clean;
+}
+
+GitProcessResult GitService::discardFileChanges(const QString &repoPath,
+                                              const WorkingTreeChange &change) const
+{
+    m_lastError.clear();
+
+    const QStringList paths = pathsForDiff(change.path);
+    if (paths.isEmpty()) {
+        m_lastError = QStringLiteral("File path is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    if (change.isUntracked()) {
+        QStringList args{QStringLiteral("clean"), QStringLiteral("-fd"), QStringLiteral("--")};
+        args.append(paths);
+        const GitProcessResult result = m_runner.run(repoPath, args);
+        if (!result.success()) {
+            setError(QStringLiteral("git clean failed"), result);
+        }
+        return result;
+    }
+
+    QStringList args{QStringLiteral("restore"), QStringLiteral("--source=HEAD"),
+                     QStringLiteral("--staged"), QStringLiteral("--worktree"), QStringLiteral("--")};
+    args.append(paths);
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git restore failed"), result);
     }
     return result;
 }
@@ -450,7 +501,22 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
     const QString normalizedPath = StatusParser::normalizeGitPath(path);
     const QStringList diffPaths = pathsForStagedDiff(m_runner, repoPath, normalizedPath);
 
+    QStringList pathsWithStagedDiff;
     for (const QString &diffPath : diffPaths) {
+        if (stagedPathDiffers(m_runner, repoPath, diffPath)) {
+            pathsWithStagedDiff.append(diffPath);
+        }
+    }
+    if (pathsWithStagedDiff.isEmpty()) {
+        return {};
+    }
+
+    const bool headExists =
+        m_runner.run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                                QStringLiteral("HEAD")})
+            .success();
+
+    for (const QString &diffPath : pathsWithStagedDiff) {
         const GitProcessResult quick =
             m_runner.run(repoPath, {QStringLiteral("diff"), QStringLiteral("-U3"),
                                     QStringLiteral("--cached"), QStringLiteral("--"), diffPath});
@@ -459,10 +525,23 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
         if (!quick.stdoutText.trimmed().isEmpty()) {
             return quick.stdoutText;
         }
+
+        if (headExists) {
+            const GitProcessResult colon =
+                m_runner.run(repoPath, {QStringLiteral("diff"), QStringLiteral("-U3"),
+                                        QStringLiteral("HEAD:") + diffPath,
+                                        QStringLiteral(":0:") + diffPath});
+            m_lastDiffCommand = QStringLiteral("git -C ") + QDir::toNativeSeparators(repoPath)
+                                + QStringLiteral(" diff -U3 HEAD:") + diffPath + QStringLiteral(" :0:")
+                                + diffPath;
+            if (!colon.stdoutText.trimmed().isEmpty()) {
+                return colon.stdoutText;
+            }
+        }
     }
 
     auto tryPathDiff = [&](const QStringList &extraArgs) -> QString {
-        for (const QString &diffPath : diffPaths) {
+        for (const QString &diffPath : pathsWithStagedDiff) {
             QStringList args{QStringLiteral("diff"), QStringLiteral("--no-ext-diff"),
                              QStringLiteral("--text"), QStringLiteral("--unified=3")};
             args << extraArgs << QStringLiteral("--") << diffPath;
@@ -494,27 +573,22 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
         return patch;
     }
 
-    const bool headExists =
-        m_runner.run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
-                                QStringLiteral("HEAD")})
-            .success();
-
     if (headExists) {
         auto tryColonDiff = [&](const QString &left, const QString &right) -> QString {
             return runDiffCommand(repoPath, {QStringLiteral("diff"), QStringLiteral("--no-ext-diff"),
                                              QStringLiteral("--unified=3"), left, right});
         };
 
-        if (diffPaths.size() >= 2) {
-            patch = tryColonDiff(QStringLiteral("HEAD:") + diffPaths.front(),
-                                 QStringLiteral(":0:") + diffPaths.back());
+        if (pathsWithStagedDiff.size() >= 2) {
+            patch = tryColonDiff(QStringLiteral("HEAD:") + pathsWithStagedDiff.front(),
+                                 QStringLiteral(":0:") + pathsWithStagedDiff.back());
             if (!patch.isEmpty()) {
                 return patch;
             }
             m_lastError.clear();
         }
 
-        for (const QString &diffPath : diffPaths) {
+        for (const QString &diffPath : pathsWithStagedDiff) {
             patch = tryColonDiff(QStringLiteral("HEAD:") + diffPath,
                                  QStringLiteral(":0:") + diffPath);
             if (!patch.isEmpty()) {
@@ -538,7 +612,7 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
         QStringList indexArgs{QStringLiteral("diff-index"), QStringLiteral("-p"),
                               QStringLiteral("--cached"), QStringLiteral("HEAD"),
                               QStringLiteral("--")};
-        indexArgs.append(diffPaths);
+        indexArgs.append(pathsWithStagedDiff);
         patch = runDiffCommand(repoPath, indexArgs);
         if (!patch.isEmpty()) {
             return patch;
@@ -546,7 +620,7 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
         m_lastError.clear();
     }
 
-    for (const QString &diffPath : diffPaths) {
+    for (const QString &diffPath : pathsWithStagedDiff) {
         GitProcessResult indexRev =
             m_runner.run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("-q"),
                                     QStringLiteral(":0:") + diffPath});
@@ -577,24 +651,6 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
             return patch;
         }
         m_lastError.clear();
-    }
-
-    for (const QString &diffPath : diffPaths) {
-        auto showBlob = [&](const QString &spec) -> QString {
-            const GitProcessResult result =
-                m_runner.run(repoPath, {QStringLiteral("show"), spec});
-            return result.success() ? result.stdoutText : QString();
-        };
-
-        const QString stagedText = showBlob(QStringLiteral(":0:") + diffPath);
-        if (stagedText.isEmpty()) {
-            continue;
-        }
-
-        const QString headText = showBlob(QStringLiteral("HEAD:") + diffPath);
-        m_lastDiffCommand = QStringLiteral("git -C ") + QDir::toNativeSeparators(repoPath)
-                            + QStringLiteral(" show :0:") + diffPath;
-        return formatStagedShowFallback(diffPath, headText, stagedText);
     }
 
     return {};
