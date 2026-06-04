@@ -56,6 +56,7 @@ Create a sample repository for manual testing:
 - Commit details panel: file list + **per-file diff** (`git show`, syntax highlighting)
 - **Working tree** tab: uncommitted/staged changes (`git status`, `git diff`)
 - **Commit** working tree changes (`git add -A`, `git commit`) via dialog
+- Create branches (`git branch` / `git checkout -b`, optional base ref)
 - Merge branch into current (optional `--no-ff`, conflict file list, abort merge)
 - Load more commits (pagination in pages of 500)
 
@@ -69,3 +70,4 @@ src/
 tests/
   fixtures/ Sample repo generator
 ```
+staged-test

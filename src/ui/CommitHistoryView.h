@@ -21,11 +21,18 @@ public:
 
 signals:
     void commitSelected(const QString &hash);
+    void viewCommitDetailsRequested(const QString &hash);
+    void createBranchFromCommitRequested(const QString &hash);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+
+private:
+    void selectRow(int row);
+    void showCommitContextMenu(int row, const QPoint &globalPos);
 
 private:
     void updateContentGeometry();

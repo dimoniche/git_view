@@ -37,6 +37,19 @@ public:
 
     GitProcessResult stageAll(const QString &repoPath) const;
     GitProcessResult commit(const QString &repoPath, const QString &message) const;
+    GitProcessResult discardAllChanges(const QString &repoPath) const;
+    GitProcessResult discardFileChanges(const QString &repoPath,
+                                      const WorkingTreeChange &change) const;
+
+    bool branchExists(const QString &repoPath, const QString &name) const;
+    QString validateBranchName(const QString &repoPath, const QString &name) const;
+    GitProcessResult createBranch(const QString &repoPath,
+                                  const QString &name,
+                                  const QString &startPoint = {}) const;
+    GitProcessResult checkoutBranch(const QString &repoPath, const QString &name) const;
+    GitProcessResult createBranchAndCheckout(const QString &repoPath,
+                                               const QString &name,
+                                               const QString &startPoint = {}) const;
 
     GitProcessResult merge(const QString &repoPath,
                            const QString &branch,

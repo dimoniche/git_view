@@ -1,5 +1,6 @@
 #include "ui/MainWindow.h"
 
+#include "core/WorkingTreeChange.h"
 #include "ui/CommitDetailsPanel.h"
 #include "ui/CommitHistoryView.h"
 #include "ui/WorkingChangesPanel.h"
@@ -9,6 +10,8 @@
 #include <QCloseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QComboBox>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QRadioButton>
 #include <QDir>
@@ -16,6 +19,7 @@
 #include <QFrame>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
@@ -23,6 +27,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -89,8 +94,29 @@ void MainWindow::setupUi()
     m_commitAction->setEnabled(false);
     connect(m_commitAction, &QAction::triggered, this, &MainWindow::commitChanges);
 
+    auto *newBranchAction = new QAction(tr("New branch…"), this);
+    newBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
+    connect(newBranchAction, &QAction::triggered, this, [this]() { createBranch(); });
+
+    m_discardAllAction = new QAction(tr("Discard all changes…"), this);
+    m_discardAllAction->setEnabled(false);
+    connect(m_discardAllAction, &QAction::triggered, this, &MainWindow::discardAllChanges);
+
+    m_discardFileAction = new QAction(tr("Discard file changes…"), this);
+    m_discardFileAction->setEnabled(false);
+    connect(m_discardFileAction, &QAction::triggered, this, [this]() {
+        showWorkingTreeTab();
+        if (m_workingPanel && m_workingPanel->hasSelectedChange()) {
+            discardFileChanges(m_workingPanel->selectedFilePath());
+        }
+    });
+
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
+    repoMenu->addAction(newBranchAction);
     repoMenu->addAction(m_commitAction);
+    repoMenu->addSeparator();
+    repoMenu->addAction(m_discardFileAction);
+    repoMenu->addAction(m_discardAllAction);
 
     auto *central = new QWidget(this);
     auto *rootLayout = new QVBoxLayout(central);
@@ -117,8 +143,15 @@ void MainWindow::setupUi()
     branchLayout->setContentsMargins(4, 4, 4, 4);
     branchLayout->addWidget(new QLabel(tr("Branches"), m_branchPanel));
     m_branchList = new QListWidget(m_branchPanel);
+    m_branchList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_branchList, &QListWidget::currentRowChanged, this, &MainWindow::onBranchSelected);
+    connect(m_branchList, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showBranchContextMenu);
     branchLayout->addWidget(m_branchList, 1);
+    m_createBranchButton = new QPushButton(tr("New branch…"), m_branchPanel);
+    m_createBranchButton->setEnabled(false);
+    connect(m_createBranchButton, &QPushButton::clicked, this, [this]() { createBranch(); });
+    branchLayout->addWidget(m_createBranchButton);
     m_mergeButton = new QPushButton(tr("Merge into current…"), m_branchPanel);
     m_mergeButton->setEnabled(false);
     connect(m_mergeButton, &QPushButton::clicked, this, &MainWindow::mergeSelectedBranch);
@@ -136,6 +169,10 @@ void MainWindow::setupUi()
     m_historyView = new CommitHistoryView;
     connect(m_historyView, &CommitHistoryView::commitSelected, this,
             &MainWindow::onCommitSelected);
+    connect(m_historyView, &CommitHistoryView::viewCommitDetailsRequested, this,
+            &MainWindow::focusCommitDetails);
+    connect(m_historyView, &CommitHistoryView::createBranchFromCommitRequested, this,
+            [this](const QString &hash) { createBranch(hash); });
     m_historyScroll->setWidget(m_historyView);
     historyLayout->addWidget(m_historyScroll, 1);
     m_loadMoreButton = new QPushButton(tr("Load more commits…"), historyColumn);
@@ -151,6 +188,11 @@ void MainWindow::setupUi()
     m_detailsPanel = new CommitDetailsPanel(m_detailsPanelContainer);
     m_workingPanel = new WorkingChangesPanel(m_detailsPanelContainer);
     connect(m_workingPanel, &WorkingChangesPanel::commitRequested, this, &MainWindow::commitChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::discardAllRequested, this, &MainWindow::discardAllChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::discardFileRequested, this,
+            &MainWindow::discardFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::fileSelectionChanged, this,
+            &MainWindow::updateWorkingTreeActions);
     m_detailsTabs = new QTabWidget(m_detailsPanelContainer);
     m_detailsTabs->addTab(m_detailsPanel, tr("Commit"));
     m_detailsTabs->addTab(m_workingPanel, tr("Working tree"));
@@ -371,14 +413,10 @@ void MainWindow::setRepository(const QString &path)
         m_detailsTabs->setCurrentWidget(m_workingPanel);
     }
 
+    m_createBranchButton->setEnabled(true);
     m_mergeButton->setEnabled(true);
     m_loadMoreButton->setEnabled(true);
-    if (m_commitAction) {
-        m_commitAction->setEnabled(true);
-    }
-    if (m_workingPanel) {
-        m_workingPanel->setCommitEnabled(true);
-    }
+    updateWorkingTreeActions();
     setStatusMessage(tr("Loaded %1").arg(topLevel));
 }
 
@@ -468,6 +506,135 @@ void MainWindow::commitChanges()
     refreshRepository();
 }
 
+void MainWindow::discardAllChanges()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Discard changes"), tr("Open a repository first."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Discard changes"),
+            tr("Cannot discard while merge conflicts are unresolved.\nUse \"Merge abort\" or resolve conflicts first.\n\n%1")
+                .arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    if (!m_git.hasUncommittedChanges(m_repo.path())) {
+        QMessageBox::information(this, tr("Discard changes"), tr("There are no changes to discard."));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const auto answer = QMessageBox::warning(
+        this, tr("Discard all changes"),
+        tr("Permanently discard ALL uncommitted changes?\n\n"
+           "• Tracked files will be reset to the last commit (git reset --hard HEAD)\n"
+           "• Untracked files and folders will be deleted (git clean -fd)\n\n"
+           "This cannot be undone."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const GitProcessResult result = m_git.discardAllChanges(m_repo.path());
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Discard failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    QMessageBox::information(this, tr("Discard changes"), tr("All uncommitted changes were discarded."));
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::discardFileChanges(const QString &path)
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Discard changes"), tr("Open a repository first."));
+        return;
+    }
+
+    if (path.isEmpty()) {
+        QMessageBox::information(this, tr("Discard changes"), tr("Select a file in the list first."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (conflicts.contains(path)) {
+        QMessageBox::critical(
+            this, tr("Discard changes"),
+            tr("Cannot discard \"%1\" while it has merge conflicts.").arg(path));
+        return;
+    }
+
+    WorkingTreeChange change;
+    bool found = false;
+    for (const WorkingTreeChange &candidate : m_git.workingTreeChanges(m_repo.path())) {
+        if (candidate.path == path) {
+            change = candidate;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        QMessageBox::information(this, tr("Discard changes"),
+                                 tr("File \"%1\" has no pending changes.").arg(path));
+        QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    QString actionText;
+    if (change.isUntracked()) {
+        actionText = tr("Delete untracked path \"%1\"?").arg(path);
+    } else {
+        actionText =
+            tr("Discard all changes to \"%1\" (staged and unstaged) and restore the last committed version?")
+                .arg(path);
+    }
+
+    const auto answer =
+        QMessageBox::warning(this, tr("Discard file changes"), actionText,
+                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const GitProcessResult result = m_git.discardFileChanges(m_repo.path(), change);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Discard failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    QMessageBox::information(this, tr("Discard changes"),
+                             tr("Changes to \"%1\" were discarded.").arg(path));
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::updateWorkingTreeActions()
+{
+    if (!m_workingPanel) {
+        return;
+    }
+    const bool repoOpen = m_repo.isValid();
+    const bool dirty = repoOpen && m_git.hasUncommittedChanges(m_repo.path());
+    if (m_discardAllAction) {
+        m_discardAllAction->setEnabled(repoOpen && dirty);
+    }
+    if (m_discardFileAction) {
+        m_discardFileAction->setEnabled(repoOpen && dirty && m_workingPanel->hasSelectedChange());
+    }
+    m_workingPanel->setCommitEnabled(repoOpen);
+}
+
 void MainWindow::updateRepoLabel()
 {
     if (!m_repo.isValid()) {
@@ -499,6 +666,7 @@ void MainWindow::refreshWorkingTree()
         m_detailsTabs->setTabText(workingTabIndex,
                                   dirty ? tr("Working tree *") : tr("Working tree"));
     }
+    updateWorkingTreeActions();
     updateRepoLabel();
 }
 
@@ -567,6 +735,14 @@ void MainWindow::onCommitSelected(const QString &hash)
     showCommitDetails(hash);
 }
 
+void MainWindow::focusCommitDetails(const QString &hash)
+{
+    showCommitDetails(hash);
+    if (m_detailsTabs && m_detailsPanel) {
+        m_detailsTabs->setCurrentWidget(m_detailsPanel);
+    }
+}
+
 void MainWindow::showCommitDetails(const QString &hash)
 {
     if (!m_repo.isValid() || hash.isEmpty()) {
@@ -602,6 +778,183 @@ Branch MainWindow::branchAtRow(int row) const
         return m_branches[static_cast<size_t>(row)];
     }
     return {};
+}
+
+void MainWindow::checkoutBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        return;
+    }
+
+    if (branch.isCurrent) {
+        return;
+    }
+
+    if (m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto answer = QMessageBox::warning(
+            this, tr("Checkout branch"),
+            tr("The working tree has uncommitted changes. Switch to \"%1\" anyway?").arg(branch.name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    const GitProcessResult result = m_git.checkoutBranch(m_repo.path(), branch.name);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Checkout failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    refreshRepository();
+}
+
+void MainWindow::showBranchContextMenu(const QPoint &pos)
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    QListWidgetItem *item = m_branchList->itemAt(pos);
+    if (!item) {
+        return;
+    }
+
+    const int row = m_branchList->row(item);
+    if (row < 0) {
+        return;
+    }
+
+    m_branchList->setCurrentRow(row);
+    const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    QMenu menu(this);
+
+    if (!branch.isCurrent) {
+        menu.addAction(tr("Checkout \"%1\"…").arg(branch.name), this,
+                       [this, branch]() { checkoutBranch(branch); });
+    }
+
+    const QString current = m_git.currentBranch(m_repo.path());
+    if (!branch.isCurrent && branch.name != current) {
+        menu.addAction(tr("Merge into current (%1)…").arg(current), this,
+                       &MainWindow::mergeSelectedBranch);
+    }
+
+    menu.addAction(tr("Show commits"), this, [this, row]() { onBranchSelected(row); });
+
+    menu.addSeparator();
+    menu.addAction(tr("New branch…"), this, [this]() { createBranch(); });
+
+    menu.exec(m_branchList->mapToGlobal(pos));
+}
+
+void MainWindow::createBranch(const QString &startPointHint)
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("New branch"), tr("Open a repository first."));
+        return;
+    }
+
+    const int row = m_branchList->currentRow();
+    const Branch selected = branchAtRow(row);
+    const QString current = m_git.currentBranch(m_repo.path());
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Create branch"));
+    dialog.resize(440, 220);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Branch name:"), &dialog));
+
+    auto *nameEdit = new QLineEdit(&dialog);
+    if (!selected.name.isEmpty() && !selected.isRemote) {
+        nameEdit->setText(selected.name + QStringLiteral("-copy"));
+    } else if (!startPointHint.isEmpty()) {
+        nameEdit->setText(QStringLiteral("branch-") + startPointHint.left(8));
+    }
+    layout->addWidget(nameEdit);
+
+    layout->addWidget(new QLabel(tr("Based on:"), &dialog));
+    auto *baseCombo = new QComboBox(&dialog);
+    int defaultBaseIndex = 0;
+    baseCombo->addItem(tr("Current branch (%1)").arg(current), QString());
+    if (!selected.name.isEmpty()) {
+        baseCombo->addItem(tr("Selected: %1").arg(selected.name), selected.name);
+    }
+    if (!startPointHint.isEmpty()) {
+        baseCombo->addItem(tr("Commit %1").arg(startPointHint.left(8)), startPointHint);
+        defaultBaseIndex = baseCombo->count() - 1;
+    }
+    baseCombo->setCurrentIndex(defaultBaseIndex);
+    layout->addWidget(baseCombo);
+
+    auto *checkoutCheck = new QCheckBox(tr("Switch to new branch after creation"), &dialog);
+    checkoutCheck->setChecked(true);
+    layout->addWidget(checkoutCheck);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString branchName = nameEdit->text().trimmed();
+    const QString validation = m_git.validateBranchName(m_repo.path(), branchName);
+    if (!validation.isEmpty()) {
+        QMessageBox::warning(this, tr("New branch"), validation);
+        return;
+    }
+
+    if (m_git.branchExists(m_repo.path(), branchName)) {
+        QMessageBox::warning(
+            this, tr("New branch"),
+            tr("Branch \"%1\" already exists. Choose another name or delete the existing branch.")
+                .arg(branchName));
+        return;
+    }
+
+    const QString startPoint = baseCombo->currentData().toString().trimmed();
+    const bool checkout = checkoutCheck->isChecked();
+
+    if (checkout && m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto answer = QMessageBox::warning(
+            this, tr("New branch"),
+            tr("The working tree has uncommitted changes. Switch branch anyway?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    GitProcessResult result;
+    if (checkout) {
+        result = m_git.createBranchAndCheckout(m_repo.path(), branchName, startPoint);
+    } else {
+        result = m_git.createBranch(m_repo.path(), branchName, startPoint);
+    }
+
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("New branch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed();
+    QMessageBox::information(
+        this, tr("New branch"),
+        output.isEmpty() ? tr("Branch \"%1\" created.").arg(branchName) : output);
+    refreshRepository();
 }
 
 void MainWindow::mergeSelectedBranch()
