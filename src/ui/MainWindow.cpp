@@ -240,6 +240,8 @@ void MainWindow::setupUi()
     connect(m_workingPanel, &WorkingChangesPanel::discardAllRequested, this, &MainWindow::discardAllChanges);
     connect(m_workingPanel, &WorkingChangesPanel::discardFileRequested, this,
             &MainWindow::discardFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::addToGitignoreRequested, this,
+            &MainWindow::addPathToGitignore);
     connect(m_workingPanel, &WorkingChangesPanel::fileSelectionChanged, this,
             &MainWindow::updateWorkingTreeActions);
     m_detailsTabs = new QTabWidget(m_detailsPanelContainer);
@@ -882,6 +884,53 @@ void MainWindow::discardFileChanges(const QString &path)
 
     QMessageBox::information(this, tr("Discard changes"),
                              tr("Changes to \"%1\" were discarded.").arg(path));
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::addPathToGitignore(const QString &path)
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Add to .gitignore"), tr("Open a repository first."));
+        return;
+    }
+
+    if (path.isEmpty()) {
+        QMessageBox::information(this, tr("Add to .gitignore"),
+                                 tr("Select a file in the list first."));
+        return;
+    }
+
+    const WorkingTreeChange change = m_git.changeForPath(m_repo.path(), path);
+    const bool tracked = !change.isUntracked();
+
+    QString message =
+        tr("Add \"%1\" to .gitignore?").arg(path);
+    if (tracked) {
+        message += QLatin1Char('\n');
+        message += QLatin1Char('\n');
+        message += tr("The file is tracked by Git; it will be removed from the index "
+                      "(git rm --cached) but kept on disk.");
+    }
+
+    const auto answer =
+        QMessageBox::question(this, tr("Add to .gitignore"), message, QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::Yes);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.addToGitignore(m_repo.path(), path);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Add to .gitignore failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    QMessageBox::information(this, tr("Add to .gitignore"),
+                             tr("\"%1\" was added to .gitignore.").arg(path));
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 

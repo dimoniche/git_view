@@ -47,6 +47,7 @@ private slots:
     void commitChanges();
     void discardAllChanges();
     void discardFileChanges(const QString &path);
+    void addPathToGitignore(const QString &path);
     void checkoutBranch(const Branch &branch);
     void deleteBranch(const Branch &branch);
     void publishBranch(const Branch &branch);

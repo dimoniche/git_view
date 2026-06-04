@@ -316,6 +316,10 @@ void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
             });
         }
 
+        menu.addAction(tr("Add to .gitignore"), this, [this, path]() {
+            emit addToGitignoreRequested(path);
+        });
+
         menu.addSeparator();
     }
 

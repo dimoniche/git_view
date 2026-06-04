@@ -51,6 +51,7 @@ public:
     GitProcessResult discardAllChanges(const QString &repoPath) const;
     GitProcessResult discardFileChanges(const QString &repoPath,
                                       const WorkingTreeChange &change) const;
+    GitProcessResult addToGitignore(const QString &repoPath, const QString &path) const;
 
     bool branchExists(const QString &repoPath, const QString &name) const;
     QString validateBranchName(const QString &repoPath, const QString &name) const;

@@ -28,6 +28,7 @@ signals:
     void commitRequested();
     void discardAllRequested();
     void discardFileRequested(const QString &path);
+    void addToGitignoreRequested(const QString &path);
     void fileSelectionChanged();
 
 private slots:

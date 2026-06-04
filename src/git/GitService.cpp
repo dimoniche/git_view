@@ -5,6 +5,7 @@
 #include "git/StatusParser.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QRegularExpression>
@@ -413,6 +414,81 @@ GitProcessResult GitService::discardFileChanges(const QString &repoPath,
     if (!result.success()) {
         setError(QStringLiteral("git restore failed"), result);
     }
+    return result;
+}
+
+GitProcessResult GitService::addToGitignore(const QString &repoPath, const QString &path) const
+{
+    m_lastError.clear();
+
+    const QString normalized = StatusParser::normalizeGitPath(path);
+    if (normalized.isEmpty()) {
+        m_lastError = QStringLiteral("File path is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    QString pattern = normalized;
+    const QFileInfo pathInfo(QDir(repoPath).filePath(pattern));
+    if (pathInfo.exists() && pathInfo.isDir() && !pattern.endsWith(QLatin1Char('/'))) {
+        pattern += QLatin1Char('/');
+    }
+
+    const QString gitignorePath = QDir(repoPath).filePath(QStringLiteral(".gitignore"));
+    QString content;
+    if (QFile::exists(gitignorePath)) {
+        QFile readFile(gitignorePath);
+        if (!readFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            m_lastError = QStringLiteral("Could not read .gitignore");
+            GitProcessResult result;
+            result.exitCode = 1;
+            return result;
+        }
+        content = QString::fromUtf8(readFile.readAll());
+    }
+
+    const auto lineMatchesPattern = [&](const QString &line) {
+        const QString trimmed = line.trimmed();
+        return trimmed == pattern || trimmed == normalized;
+    };
+
+    for (const QString &line : content.split(QLatin1Char('\n'), Qt::KeepEmptyParts)) {
+        if (lineMatchesPattern(line)) {
+            GitProcessResult result;
+            result.exitCode = 0;
+            return result;
+        }
+    }
+
+    if (!content.isEmpty() && !content.endsWith(QLatin1Char('\n'))) {
+        content += QLatin1Char('\n');
+    }
+    content += pattern + QLatin1Char('\n');
+
+    QFile writeFile(gitignorePath);
+    if (!writeFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        m_lastError = QStringLiteral("Could not write .gitignore");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+    writeFile.write(content.toUtf8());
+
+    const WorkingTreeChange change = changeForPath(repoPath, path);
+    if (!change.isUntracked()) {
+        QStringList args{QStringLiteral("rm"), QStringLiteral("--cached"), QStringLiteral("-r"),
+                         QStringLiteral("--")};
+        args.append(pathsForDiff(path));
+        const GitProcessResult result = m_runner.run(repoPath, args);
+        if (!result.success()) {
+            setError(QStringLiteral("git rm --cached failed"), result);
+        }
+        return result;
+    }
+
+    GitProcessResult result;
+    result.exitCode = 0;
     return result;
 }
 
