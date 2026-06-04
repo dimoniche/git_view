@@ -50,6 +50,18 @@ public:
     GitProcessResult createBranchAndCheckout(const QString &repoPath,
                                                const QString &name,
                                                const QString &startPoint = {}) const;
+    GitProcessResult deleteBranch(const QString &repoPath,
+                                  const QString &branchName,
+                                  bool isRemote,
+                                  bool force = false) const;
+    QStringList remotes(const QString &repoPath) const;
+    QString defaultRemote(const QString &repoPath) const;
+    GitProcessResult publishBranch(const QString &repoPath,
+                                   const QString &branchName,
+                                   const QString &remote) const;
+    GitProcessResult pushBranch(const QString &repoPath,
+                                const QString &branchName,
+                                const QString &remote) const;
 
     GitProcessResult merge(const QString &repoPath,
                            const QString &branch,

@@ -184,6 +184,19 @@ void CommitHistoryView::paintEvent(QPaintEvent *event)
     }
 
     const QRect graphArea = graphRect();
+    const int textAreaWidth = std::max(0, width() - textX);
+
+    for (size_t row = 0; row < m_commits.size(); ++row) {
+        const int y = rowY(static_cast<int>(row));
+        const QRect textRowRect(textX, y, textAreaWidth, kRowHeight);
+
+        if (static_cast<int>(row) == m_selectedRow) {
+            painter.fillRect(textRowRect, palette().color(QPalette::Highlight));
+        } else if (row % 2 == 1) {
+            painter.fillRect(textRowRect, palette().color(QPalette::AlternateBase));
+        }
+    }
+
     painter.setClipRect(graphArea);
     for (const GraphEdge &edge : m_layout.edges) {
         drawEdge(painter, edge, kHeaderHeight);
@@ -192,13 +205,6 @@ void CommitHistoryView::paintEvent(QPaintEvent *event)
 
     for (size_t row = 0; row < m_commits.size(); ++row) {
         const int y = rowY(static_cast<int>(row));
-        const QRect rowRect(0, y, width(), kRowHeight);
-
-        if (static_cast<int>(row) == m_selectedRow) {
-            painter.fillRect(rowRect, palette().color(QPalette::Highlight));
-        } else if (row % 2 == 1) {
-            painter.fillRect(rowRect, palette().color(QPalette::AlternateBase));
-        }
 
         const int lane = m_layout.lanes[row];
         const int cx = kGraphPadding + lane * kLaneWidth + kLaneWidth / 2;

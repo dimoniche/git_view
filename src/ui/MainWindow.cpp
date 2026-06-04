@@ -75,6 +75,7 @@ void MainWindow::setupUi()
     toolbar->setFloatable(false);
     toolbar->addAction(openAction);
     toolbar->addAction(refreshAction);
+    toolbar->addAction(m_publishBranchAction);
     toolbar->addSeparator();
 
     m_toggleBranchesAction = toolbar->addAction(tr("Branches"));
@@ -98,6 +99,12 @@ void MainWindow::setupUi()
     newBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
     connect(newBranchAction, &QAction::triggered, this, [this]() { createBranch(); });
 
+    m_publishBranchAction = new QAction(tr("First publish…"), this);
+    m_publishBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
+    m_publishBranchAction->setEnabled(false);
+    connect(m_publishBranchAction, &QAction::triggered, this,
+            &MainWindow::publishOrPushSelectedBranch);
+
     m_discardAllAction = new QAction(tr("Discard all changes…"), this);
     m_discardAllAction->setEnabled(false);
     connect(m_discardAllAction, &QAction::triggered, this, &MainWindow::discardAllChanges);
@@ -113,6 +120,7 @@ void MainWindow::setupUi()
 
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
     repoMenu->addAction(newBranchAction);
+    repoMenu->addAction(m_publishBranchAction);
     repoMenu->addAction(m_commitAction);
     repoMenu->addSeparator();
     repoMenu->addAction(m_discardFileAction);
@@ -152,6 +160,15 @@ void MainWindow::setupUi()
     m_createBranchButton->setEnabled(false);
     connect(m_createBranchButton, &QPushButton::clicked, this, [this]() { createBranch(); });
     branchLayout->addWidget(m_createBranchButton);
+
+    m_publishBranchButton = new QPushButton(tr("First publish…"), m_branchPanel);
+    m_publishBranchButton->setEnabled(false);
+    m_publishBranchButton->setToolTip(
+        tr("Push the current or selected branch to a remote for the first time (git push -u)"));
+    connect(m_publishBranchButton, &QPushButton::clicked, this,
+            &MainWindow::publishOrPushSelectedBranch);
+    branchLayout->addWidget(m_publishBranchButton);
+
     m_mergeButton = new QPushButton(tr("Merge into current…"), m_branchPanel);
     m_mergeButton->setEnabled(false);
     connect(m_mergeButton, &QPushButton::clicked, this, &MainWindow::mergeSelectedBranch);
@@ -417,6 +434,7 @@ void MainWindow::setRepository(const QString &path)
     m_mergeButton->setEnabled(true);
     m_loadMoreButton->setEnabled(true);
     updateWorkingTreeActions();
+    updateBranchActions();
     setStatusMessage(tr("Loaded %1").arg(topLevel));
 }
 
@@ -686,9 +704,106 @@ void MainWindow::reloadBranches()
         }
         if (branch.isRemote) {
             label += QStringLiteral(" [remote]");
+        } else if (!branch.hasUpstream()) {
+            label += QStringLiteral(" [unpublished]");
         }
         auto *item = new QListWidgetItem(label, m_branchList);
         item->setData(Qt::UserRole, branch.name);
+    }
+
+    updateBranchActions();
+}
+
+Branch MainWindow::branchForActions() const
+{
+    const int row = m_branchList ? m_branchList->currentRow() : -1;
+    if (row >= 0) {
+        const Branch selected = branchAtRow(row);
+        if (!selected.name.isEmpty() && !selected.isRemote) {
+            return selected;
+        }
+    }
+
+    const QString current = m_repo.isValid() ? m_git.currentBranch(m_repo.path()) : QString();
+    for (const Branch &branch : m_branches) {
+        if (branch.name == current && !branch.isRemote) {
+            return branch;
+        }
+    }
+
+    Branch fallback;
+    fallback.name = current;
+    fallback.isCurrent = true;
+    return fallback;
+}
+
+void MainWindow::updateBranchActions()
+{
+    const bool repoOpen = m_repo.isValid();
+
+    if (m_createBranchButton) {
+        m_createBranchButton->setEnabled(repoOpen);
+    }
+
+    if (m_mergeButton) {
+        const int row = m_branchList ? m_branchList->currentRow() : -1;
+        m_mergeButton->setEnabled(repoOpen && row >= 0);
+    }
+
+    const Branch branch = branchForActions();
+    const bool localBranch = repoOpen && !branch.name.isEmpty() && !branch.isRemote;
+    const bool hasRemotes = repoOpen && !m_git.remotes(m_repo.path()).isEmpty();
+    const bool unpublished = localBranch && !branch.hasUpstream();
+    const bool published = localBranch && branch.hasUpstream();
+
+    if (m_publishBranchButton) {
+        if (unpublished) {
+            m_publishBranchButton->setText(tr("First publish…"));
+            m_publishBranchButton->setEnabled(hasRemotes);
+            m_publishBranchButton->setToolTip(
+                tr("First push of \"%1\" to a remote (git push -u)").arg(branch.name));
+        } else if (published) {
+            m_publishBranchButton->setText(tr("Push branch…"));
+            m_publishBranchButton->setEnabled(true);
+            m_publishBranchButton->setToolTip(
+                tr("Push commits on \"%1\" to %2").arg(branch.name, branch.upstream));
+        } else {
+            m_publishBranchButton->setText(tr("First publish…"));
+            m_publishBranchButton->setEnabled(false);
+            m_publishBranchButton->setToolTip(
+                tr("Select a local branch or switch to one to publish"));
+        }
+    }
+
+    if (m_publishBranchAction) {
+        if (m_publishBranchButton) {
+            m_publishBranchAction->setText(m_publishBranchButton->text());
+            m_publishBranchAction->setEnabled(m_publishBranchButton->isEnabled());
+        } else {
+            m_publishBranchAction->setEnabled(false);
+        }
+    }
+}
+
+void MainWindow::publishOrPushSelectedBranch()
+{
+    const Branch branch = branchForActions();
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Publish branch"),
+                                 tr("Open a repository and select a local branch."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Publish branch"),
+                                 tr("Select a local branch to publish."));
+        return;
+    }
+
+    if (branch.hasUpstream()) {
+        pushBranch(branch);
+    } else {
+        publishBranch(branch);
     }
 }
 
@@ -760,6 +875,8 @@ void MainWindow::showCommitDetails(const QString &hash)
 
 void MainWindow::onBranchSelected(int row)
 {
+    updateBranchActions();
+
     if (!m_repo.isValid() || row < 0) {
         m_branchFilter.clear();
         if (m_repo.isValid()) {
@@ -778,6 +895,239 @@ Branch MainWindow::branchAtRow(int row) const
         return m_branches[static_cast<size_t>(row)];
     }
     return {};
+}
+
+namespace {
+
+bool branchDeleteNeedsForce(const GitProcessResult &result)
+{
+    return result.stderrText.contains(QStringLiteral("not fully merged"), Qt::CaseInsensitive);
+}
+
+} // namespace
+
+void MainWindow::deleteBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Delete branch"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isCurrent) {
+        QMessageBox::warning(
+            this, tr("Delete branch"),
+            tr("Cannot delete the current branch \"%1\".\nSwitch to another branch first.")
+                .arg(branch.name));
+        return;
+    }
+
+    QString prompt;
+    if (branch.isRemote) {
+        const int slash = branch.name.indexOf(QLatin1Char('/'));
+        const QString remote = slash > 0 ? branch.name.left(slash) : branch.name;
+        const QString name = slash > 0 ? branch.name.mid(slash + 1) : QString();
+        prompt = tr("Delete remote branch \"%1\" on \"%2\"?\n\n"
+                    "This runs: git push %2 --delete %3")
+                     .arg(branch.name, remote, name);
+    } else {
+        prompt = tr("Delete local branch \"%1\"?\n\n"
+                    "If it is not fully merged, you will be asked to force delete.")
+            .arg(branch.name);
+    }
+
+    const auto answer =
+        QMessageBox::warning(this, tr("Delete branch"), prompt, QMessageBox::Yes | QMessageBox::No,
+                             QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    GitProcessResult result =
+        m_git.deleteBranch(m_repo.path(), branch.name, branch.isRemote, false);
+
+    if (!result.success() && !branch.isRemote && branchDeleteNeedsForce(result)) {
+        const auto forceAnswer = QMessageBox::warning(
+            this, tr("Delete branch"),
+            tr("Branch \"%1\" is not fully merged.\nForce delete anyway?").arg(branch.name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (forceAnswer == QMessageBox::Yes) {
+            result = m_git.deleteBranch(m_repo.path(), branch.name, false, true);
+        }
+    }
+
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Delete branch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    if (m_branchFilter == branch.name) {
+        m_branchFilter.clear();
+    }
+
+    QMessageBox::information(this, tr("Delete branch"),
+                             tr("Branch \"%1\" was deleted.").arg(branch.name));
+    refreshRepository();
+}
+
+QString MainWindow::pickRemoteForBranch(const Branch &branch, const QString &title)
+{
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, title,
+            tr("No git remotes configured.\nAdd one with: git remote add <name> <url>"));
+        return {};
+    }
+
+    QString remote = m_git.defaultRemote(m_repo.path());
+    if (remoteList.size() > 1) {
+        QDialog dialog(this);
+        dialog.setWindowTitle(title);
+
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->addWidget(new QLabel(tr("Remote for branch \"%1\".").arg(branch.name), &dialog));
+
+        auto *remoteCombo = new QComboBox(&dialog);
+        for (const QString &name : remoteList) {
+            remoteCombo->addItem(name);
+        }
+        const int defaultIndex = remoteList.indexOf(m_git.defaultRemote(m_repo.path()));
+        remoteCombo->setCurrentIndex(defaultIndex >= 0 ? defaultIndex : 0);
+        layout->addWidget(remoteCombo);
+
+        auto *buttons =
+            new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+
+        if (dialog.exec() != QDialog::Accepted) {
+            return {};
+        }
+        remote = remoteCombo->currentText();
+    }
+
+    return remote;
+}
+
+void MainWindow::publishBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Publish branch"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Publish branch"),
+                               tr("Remote-tracking branches cannot be published."));
+        return;
+    }
+
+    if (branch.hasUpstream()) {
+        QMessageBox::information(
+            this, tr("Publish branch"),
+            tr("Branch \"%1\" already tracks %2.\nUse \"Push branch…\" to upload new commits.")
+                .arg(branch.name, branch.upstream));
+        return;
+    }
+
+    const QString remote = pickRemoteForBranch(branch, tr("Publish branch"));
+    if (remote.isEmpty()) {
+        return;
+    }
+
+    const auto answer = QMessageBox::question(
+        this, tr("First publish"),
+        tr("First publish of branch \"%1\" to \"%2\"?\n\n"
+           "This runs: git push -u %2 %1")
+            .arg(branch.name, remote),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const GitProcessResult result = m_git.publishBranch(m_repo.path(), branch.name, remote);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Publish branch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    QMessageBox::information(
+        this, tr("First publish"),
+        output.isEmpty() ? tr("Branch \"%1\" published to %2.").arg(branch.name, remote)
+                         : output);
+    refreshRepository();
+}
+
+void MainWindow::pushBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Push branch"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Push branch"),
+                               tr("Select a local branch to push."));
+        return;
+    }
+
+    if (!branch.hasUpstream()) {
+        QMessageBox::information(this, tr("Push branch"),
+                               tr("Branch \"%1\" is not published yet.\nUse \"First publish…\" first.")
+                                   .arg(branch.name));
+        return;
+    }
+
+    QString remote;
+    const int slash = branch.upstream.indexOf(QLatin1Char('/'));
+    if (slash > 0) {
+        remote = branch.upstream.left(slash);
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Push branch"),
+            tr("No git remotes configured.\nAdd one with: git remote add <name> <url>"));
+        return;
+    }
+
+    if (remote.isEmpty() || !remoteList.contains(remote) || remoteList.size() > 1) {
+        remote = pickRemoteForBranch(branch, tr("Push branch"));
+        if (remote.isEmpty()) {
+            return;
+        }
+    }
+
+    const auto answer = QMessageBox::question(
+        this, tr("Push branch"),
+        tr("Push commits from \"%1\" to \"%2\"?\n\n"
+           "This runs: git push %2 %1")
+            .arg(branch.name, remote),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const GitProcessResult result = m_git.pushBranch(m_repo.path(), branch.name, remote);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Push branch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    QMessageBox::information(
+        this, tr("Push branch"),
+        output.isEmpty() ? tr("Branch \"%1\" pushed to %2.").arg(branch.name, remote) : output);
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
 void MainWindow::checkoutBranch(const Branch &branch)
@@ -847,6 +1197,21 @@ void MainWindow::showBranchContextMenu(const QPoint &pos)
     }
 
     menu.addAction(tr("Show commits"), this, [this, row]() { onBranchSelected(row); });
+
+    if (!branch.isRemote) {
+        if (branch.hasUpstream()) {
+            menu.addAction(tr("Push branch…"), this, [this, branch]() { pushBranch(branch); });
+        } else {
+            menu.addAction(tr("First publish…"), this,
+                           [this, branch]() { publishBranch(branch); });
+        }
+    }
+
+    menu.addSeparator();
+
+    QAction *deleteAction =
+        menu.addAction(tr("Delete branch…"), this, [this, branch]() { deleteBranch(branch); });
+    deleteAction->setEnabled(!branch.isCurrent);
 
     menu.addSeparator();
     menu.addAction(tr("New branch…"), this, [this]() { createBranch(); });
@@ -955,6 +1320,21 @@ void MainWindow::createBranch(const QString &startPointHint)
         this, tr("New branch"),
         output.isEmpty() ? tr("Branch \"%1\" created.").arg(branchName) : output);
     refreshRepository();
+
+    if (checkout && !m_git.remotes(m_repo.path()).isEmpty()) {
+        Branch branch;
+        branch.name = branchName;
+        branch.isCurrent = true;
+        const auto publishAnswer = QMessageBox::question(
+            this, tr("First publish"),
+            tr("Publish new branch \"%1\" to a remote now?\n\n"
+               "This is the first push (git push -u).")
+                .arg(branchName),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (publishAnswer == QMessageBox::Yes) {
+            publishBranch(branch);
+        }
+    }
 }
 
 void MainWindow::mergeSelectedBranch()

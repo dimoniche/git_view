@@ -6,6 +6,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 
 namespace {
 
@@ -155,6 +156,28 @@ std::vector<Branch> GitService::branches(const QString &repoPath) const
         return list;
     }
 
+    const QStringList remoteNames = remotes(repoPath);
+
+    QHash<QString, QString> upstreamByBranch;
+    const GitProcessResult upstreamResult = m_runner.run(
+        repoPath, {QStringLiteral("for-each-ref"), QStringLiteral("refs/heads/"),
+                   QStringLiteral("--format=%(refname:short)|%(upstream:short)")});
+    if (upstreamResult.success()) {
+        for (QString line :
+             upstreamResult.stdoutText.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+            line = line.trimmed();
+            const int sep = line.indexOf(QLatin1Char('|'));
+            if (sep < 0) {
+                continue;
+            }
+            const QString name = line.left(sep).trimmed();
+            const QString upstream = line.mid(sep + 1).trimmed();
+            if (!name.isEmpty() && !upstream.isEmpty()) {
+                upstreamByBranch.insert(name, upstream);
+            }
+        }
+    }
+
     const QStringList lines = result.stdoutText.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     for (QString line : lines) {
         line = line.trimmed();
@@ -166,8 +189,15 @@ std::vector<Branch> GitService::branches(const QString &repoPath) const
         Branch branch;
         branch.name = line.left(sep).trimmed();
         branch.tipHash = line.mid(sep + 1).trimmed();
-        branch.isRemote = branch.name.startsWith(QLatin1String("origin/"))
-                          || branch.name.startsWith(QLatin1String("upstream/"));
+        for (const QString &remote : remoteNames) {
+            if (!remote.isEmpty() && branch.name.startsWith(remote + QLatin1Char('/'))) {
+                branch.isRemote = true;
+                break;
+            }
+        }
+        if (!branch.isRemote) {
+            branch.upstream = upstreamByBranch.value(branch.name);
+        }
         branch.isCurrent = (branch.name == current);
         list.push_back(std::move(branch));
     }
@@ -418,6 +448,129 @@ GitProcessResult GitService::createBranchAndCheckout(const QString &repoPath,
     const GitProcessResult result = m_runner.run(repoPath, args);
     if (!result.success()) {
         setError(QStringLiteral("git checkout -b failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::deleteBranch(const QString &repoPath,
+                                          const QString &branchName,
+                                          bool isRemote,
+                                          bool force) const
+{
+    m_lastError.clear();
+
+    const QString trimmed = branchName.trimmed();
+    if (trimmed.isEmpty()) {
+        m_lastError = QStringLiteral("Branch name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    if (trimmed == currentBranch(repoPath)) {
+        m_lastError = QStringLiteral("Cannot delete the current branch");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    if (isRemote) {
+        const int slash = trimmed.indexOf(QLatin1Char('/'));
+        if (slash <= 0) {
+            m_lastError = QStringLiteral("Invalid remote branch name: %1").arg(trimmed);
+            GitProcessResult result;
+            result.exitCode = 1;
+            return result;
+        }
+
+        const QString remote = trimmed.left(slash);
+        const QString name = trimmed.mid(slash + 1);
+        const GitProcessResult result =
+            m_runner.run(repoPath, {QStringLiteral("push"), remote, QStringLiteral("--delete"), name});
+        if (!result.success()) {
+            setError(QStringLiteral("git push --delete failed"), result);
+        }
+        return result;
+    }
+
+    QStringList args{QStringLiteral("branch")};
+    args << (force ? QStringLiteral("-D") : QStringLiteral("-d")) << trimmed;
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git branch delete failed"), result);
+    }
+    return result;
+}
+
+QStringList GitService::remotes(const QString &repoPath) const
+{
+    const GitProcessResult result = m_runner.run(repoPath, {QStringLiteral("remote")});
+    if (!result.success()) {
+        return {};
+    }
+
+    QStringList names =
+        result.stdoutText.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (QString &name : names) {
+        name = name.trimmed();
+    }
+    return names;
+}
+
+QString GitService::defaultRemote(const QString &repoPath) const
+{
+    const QStringList names = remotes(repoPath);
+    if (names.contains(QStringLiteral("origin"))) {
+        return QStringLiteral("origin");
+    }
+    if (!names.isEmpty()) {
+        return names.front();
+    }
+    return {};
+}
+
+GitProcessResult GitService::publishBranch(const QString &repoPath,
+                                           const QString &branchName,
+                                           const QString &remote) const
+{
+    m_lastError.clear();
+
+    const QString trimmedBranch = branchName.trimmed();
+    const QString trimmedRemote = remote.trimmed();
+    if (trimmedBranch.isEmpty() || trimmedRemote.isEmpty()) {
+        m_lastError = QStringLiteral("Branch or remote name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result = m_runner.run(
+        repoPath, {QStringLiteral("push"), QStringLiteral("-u"), trimmedRemote, trimmedBranch});
+    if (!result.success()) {
+        setError(QStringLiteral("git push -u failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::pushBranch(const QString &repoPath,
+                                        const QString &branchName,
+                                        const QString &remote) const
+{
+    m_lastError.clear();
+
+    const QString trimmedBranch = branchName.trimmed();
+    const QString trimmedRemote = remote.trimmed();
+    if (trimmedBranch.isEmpty() || trimmedRemote.isEmpty()) {
+        m_lastError = QStringLiteral("Branch or remote name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("push"), trimmedRemote, trimmedBranch});
+    if (!result.success()) {
+        setError(QStringLiteral("git push failed"), result);
     }
     return result;
 }

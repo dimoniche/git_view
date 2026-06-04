@@ -46,6 +46,10 @@ private slots:
     void discardAllChanges();
     void discardFileChanges(const QString &path);
     void checkoutBranch(const Branch &branch);
+    void deleteBranch(const Branch &branch);
+    void publishBranch(const Branch &branch);
+    void pushBranch(const Branch &branch);
+    void publishOrPushSelectedBranch();
     void showBranchContextMenu(const QPoint &pos);
 
 private:
@@ -63,9 +67,12 @@ private:
     void showCommitDetails(const QString &hash);
     void refreshWorkingTree();
     void updateWorkingTreeActions();
+    void updateBranchActions();
     void updateRepoLabel();
     void setStatusMessage(const QString &message);
     Branch branchAtRow(int row) const;
+    Branch branchForActions() const;
+    QString pickRemoteForBranch(const Branch &branch, const QString &title);
 
     GitService m_git;
     Repo m_repo;
@@ -82,6 +89,7 @@ private:
     QTabWidget *m_detailsTabs = nullptr;
     QScrollArea *m_historyScroll = nullptr;
     QPushButton *m_createBranchButton = nullptr;
+    QPushButton *m_publishBranchButton = nullptr;
     QPushButton *m_mergeButton = nullptr;
     QPushButton *m_loadMoreButton = nullptr;
 
@@ -94,4 +102,5 @@ private:
     QAction *m_commitAction = nullptr;
     QAction *m_discardAllAction = nullptr;
     QAction *m_discardFileAction = nullptr;
+    QAction *m_publishBranchAction = nullptr;
 };
