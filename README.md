@@ -53,7 +53,8 @@ Create a sample repository for manual testing:
 
 - Open local repository, list branches (local and remote)
 - Commit history with **branch graph** (lane layout) and metadata columns
-- Commit details panel (`git show` + `diff-tree --name-status`)
+- Commit details panel: file list + **per-file diff** (`git show`, syntax highlighting)
+- **Working tree** tab: uncommitted/staged changes (`git status`, `git diff`)
 - Merge branch into current (optional `--no-ff`, conflict file list, abort merge)
 - Load more commits (pagination in pages of 500)
 

@@ -3,6 +3,7 @@
 #include "core/Branch.h"
 #include "core/Commit.h"
 #include "core/CommitDetails.h"
+#include "core/WorkingTreeChange.h"
 #include "git/GitProcessRunner.h"
 
 #include <QString>
@@ -10,6 +11,12 @@
 
 struct GitError {
     QString message;
+};
+
+enum class WorkingDiffScope {
+    Unstaged,
+    Staged,
+    AgainstHead,
 };
 
 class GitService {
@@ -34,10 +41,25 @@ public:
     QStringList unmergedFiles(const QString &repoPath) const;
 
     CommitDetails commitDetails(const QString &repoPath, const QString &hash) const;
+    QString commitFileDiff(const QString &repoPath,
+                           const QString &hash,
+                           const QString &path) const;
+
+    std::vector<WorkingTreeChange> workingTreeChanges(const QString &repoPath) const;
+    QString workingTreeFileDiff(const QString &repoPath,
+                                const QString &path,
+                                WorkingDiffScope scope,
+                                const WorkingTreeChange &change) const;
 
     QString lastError() const { return m_lastError; }
+    QString lastDiffCommand() const { return m_lastDiffCommand; }
 
 private:
+    QString stagedDiffForPath(const QString &repoPath, const QString &path) const;
+    QString runDiffCommand(const QString &repoPath, const QStringList &args) const;
+
+    mutable QString m_lastDiffCommand;
+
     std::vector<Commit> runLog(const QString &repoPath,
                                const QStringList &extraArgs,
                                int maxCount) const;

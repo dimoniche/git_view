@@ -2,6 +2,7 @@
 
 #include "ui/CommitDetailsPanel.h"
 #include "ui/CommitHistoryView.h"
+#include "ui/WorkingChangesPanel.h"
 
 #include <QAction>
 #include <QCheckBox>
@@ -9,7 +10,6 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QDockWidget>
 #include <QFileDialog>
 #include <QFrame>
 #include <QLabel>
@@ -19,6 +19,9 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSplitter>
+#include <QTabWidget>
+#include <QToolBar>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -26,20 +29,9 @@ namespace {
 
 constexpr int kInitialLogLimit = 500;
 constexpr int kLogPageSize = 500;
-constexpr int kDockMinWidth = 200;
-
-QDockWidget *createDock(const QString &title, const QString &objectName, QWidget *content,
-                        QMainWindow *window)
-{
-    auto *dock = new QDockWidget(title, window);
-    dock->setObjectName(objectName);
-    dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable
-                      | QDockWidget::DockWidgetFloatable);
-    dock->setWidget(content);
-    dock->setMinimumWidth(kDockMinWidth);
-    return dock;
-}
+constexpr int kSplitterHandleWidth = 14;
+constexpr int kDefaultBranchWidth = 260;
+constexpr int kDefaultDetailsWidth = 420;
 
 } // namespace
 
@@ -71,89 +63,210 @@ void MainWindow::setupUi()
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
 
-    setDockNestingEnabled(true);
+    auto *toolbar = addToolBar(tr("Main"));
+    toolbar->setMovable(false);
+    toolbar->setFloatable(false);
+    toolbar->addAction(openAction);
+    toolbar->addAction(refreshAction);
+    toolbar->addSeparator();
+
+    m_toggleBranchesAction = toolbar->addAction(tr("Branches"));
+    m_toggleBranchesAction->setCheckable(true);
+    m_toggleBranchesAction->setChecked(true);
+    m_toggleBranchesAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_B));
+    connect(m_toggleBranchesAction, &QAction::toggled, this, &MainWindow::toggleBranchesPanel);
+
+    m_toggleDetailsAction = toolbar->addAction(tr("Details"));
+    m_toggleDetailsAction->setCheckable(true);
+    m_toggleDetailsAction->setChecked(true);
+    m_toggleDetailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
+    connect(m_toggleDetailsAction, &QAction::toggled, this, &MainWindow::toggleDetailsPanel);
 
     auto *central = new QWidget(this);
     auto *rootLayout = new QVBoxLayout(central);
     rootLayout->setContentsMargins(6, 6, 6, 6);
+    rootLayout->setSpacing(6);
 
     m_repoLabel = new QLabel(tr("No repository"), central);
-    m_repoLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_repoLabel->setTextFormat(Qt::RichText);
+    m_repoLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    m_repoLabel->setOpenExternalLinks(false);
+    connect(m_repoLabel, &QLabel::linkActivated, this, [this](const QString &link) {
+        if (link == QStringLiteral("working")) {
+            showWorkingTreeTab();
+        }
+    });
     rootLayout->addWidget(m_repoLabel);
 
-    m_historyScroll = new QScrollArea(central);
+    m_mainSplitter = new QSplitter(Qt::Horizontal, central);
+    applySplitterStyle(m_mainSplitter);
+
+    m_branchPanel = new QWidget(m_mainSplitter);
+    m_branchPanel->setMinimumWidth(180);
+    auto *branchLayout = new QVBoxLayout(m_branchPanel);
+    branchLayout->setContentsMargins(4, 4, 4, 4);
+    branchLayout->addWidget(new QLabel(tr("Branches"), m_branchPanel));
+    m_branchList = new QListWidget(m_branchPanel);
+    connect(m_branchList, &QListWidget::currentRowChanged, this, &MainWindow::onBranchSelected);
+    branchLayout->addWidget(m_branchList, 1);
+    m_mergeButton = new QPushButton(tr("Merge into current…"), m_branchPanel);
+    m_mergeButton->setEnabled(false);
+    connect(m_mergeButton, &QPushButton::clicked, this, &MainWindow::mergeSelectedBranch);
+    branchLayout->addWidget(m_mergeButton);
+    m_mainSplitter->addWidget(m_branchPanel);
+
+    auto *historyColumn = new QWidget(m_mainSplitter);
+    auto *historyLayout = new QVBoxLayout(historyColumn);
+    historyLayout->setContentsMargins(0, 0, 0, 0);
+    m_historyScroll = new QScrollArea(historyColumn);
     m_historyScroll->setWidgetResizable(true);
     m_historyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_historyScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_historyScroll->setFrameShape(QFrame::StyledPanel);
-
     m_historyView = new CommitHistoryView;
-    connect(m_historyView, &CommitHistoryView::commitSelected,
-            this, &MainWindow::onCommitSelected);
+    connect(m_historyView, &CommitHistoryView::commitSelected, this,
+            &MainWindow::onCommitSelected);
     m_historyScroll->setWidget(m_historyView);
-    rootLayout->addWidget(m_historyScroll, 1);
-
-    m_loadMoreButton = new QPushButton(tr("Load more commits…"), central);
+    historyLayout->addWidget(m_historyScroll, 1);
+    m_loadMoreButton = new QPushButton(tr("Load more commits…"), historyColumn);
     m_loadMoreButton->setEnabled(false);
     connect(m_loadMoreButton, &QPushButton::clicked, this, &MainWindow::loadMoreCommits);
-    rootLayout->addWidget(m_loadMoreButton);
+    historyLayout->addWidget(m_loadMoreButton);
+    m_mainSplitter->addWidget(historyColumn);
+
+    m_detailsPanelContainer = new QWidget(m_mainSplitter);
+    m_detailsPanelContainer->setMinimumWidth(300);
+    auto *detailsLayout = new QVBoxLayout(m_detailsPanelContainer);
+    detailsLayout->setContentsMargins(4, 4, 4, 4);
+    m_detailsPanel = new CommitDetailsPanel(m_detailsPanelContainer);
+    m_workingPanel = new WorkingChangesPanel(m_detailsPanelContainer);
+    m_detailsTabs = new QTabWidget(m_detailsPanelContainer);
+    m_detailsTabs->addTab(m_detailsPanel, tr("Commit"));
+    m_detailsTabs->addTab(m_workingPanel, tr("Working tree"));
+    connect(m_detailsTabs, &QTabWidget::currentChanged, this, [this](int index) {
+        if (m_detailsTabs->widget(index) == m_workingPanel) {
+            refreshWorkingTree();
+        }
+    });
+    detailsLayout->addWidget(m_detailsTabs);
+    m_mainSplitter->addWidget(m_detailsPanelContainer);
+
+    m_mainSplitter->setStretchFactor(0, 0);
+    m_mainSplitter->setStretchFactor(1, 1);
+    m_mainSplitter->setStretchFactor(2, 0);
+    m_mainSplitter->setSizes({kDefaultBranchWidth, 700, kDefaultDetailsWidth});
+
+    rootLayout->addWidget(m_mainSplitter, 1);
 
     m_statusLabel = new QLabel(central);
     rootLayout->addWidget(m_statusLabel);
 
     setCentralWidget(central);
 
-    auto *branchPanel = new QWidget(this);
-    auto *branchLayout = new QVBoxLayout(branchPanel);
-    branchLayout->setContentsMargins(4, 4, 4, 4);
-    m_branchList = new QListWidget(branchPanel);
-    connect(m_branchList, &QListWidget::currentRowChanged,
-            this, &MainWindow::onBranchSelected);
-    branchLayout->addWidget(m_branchList, 1);
-
-    m_mergeButton = new QPushButton(tr("Merge into current…"), branchPanel);
-    m_mergeButton->setEnabled(false);
-    connect(m_mergeButton, &QPushButton::clicked, this, &MainWindow::mergeSelectedBranch);
-    branchLayout->addWidget(m_mergeButton);
-
-    m_branchesDock =
-        createDock(tr("Branches"), QStringLiteral("BranchesDock"), branchPanel, this);
-    addDockWidget(Qt::LeftDockWidgetArea, m_branchesDock);
-
-    m_detailsPanel = new CommitDetailsPanel(this);
-    m_detailsDock = createDock(tr("Commit details"), QStringLiteral("DetailsDock"),
-                               m_detailsPanel, this);
-    addDockWidget(Qt::RightDockWidgetArea, m_detailsDock);
-
     auto *viewMenu = menuBar()->addMenu(tr("&View"));
-    QAction *branchesAction = m_branchesDock->toggleViewAction();
-    branchesAction->setText(tr("Branches panel"));
-    branchesAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_B));
-    viewMenu->addAction(branchesAction);
+    viewMenu->addAction(m_toggleBranchesAction);
+    viewMenu->addAction(m_toggleDetailsAction);
 
-    QAction *detailsAction = m_detailsDock->toggleViewAction();
-    detailsAction->setText(tr("Commit details panel"));
-    detailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
-    viewMenu->addAction(detailsAction);
+    auto *workingTabAction = new QAction(tr("Working tree changes"), this);
+    workingTabAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
+    connect(workingTabAction, &QAction::triggered, this, &MainWindow::showWorkingTreeTab);
+    viewMenu->addAction(workingTabAction);
+
+    auto *focusHistoryAction = new QAction(tr("Focus commit history"), this);
+    focusHistoryAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
+    connect(focusHistoryAction, &QAction::triggered, this, &MainWindow::focusHistoryPanel);
+    viewMenu->addAction(focusHistoryAction);
 
     viewMenu->addSeparator();
-    viewMenu->addAction(tr("Reset layout"), this, [this]() {
-        QSettings settings;
-        settings.remove(QStringLiteral("windowGeometry"));
-        settings.remove(QStringLiteral("windowState"));
-        resize(1200, 800);
-        m_branchesDock->show();
-        m_detailsDock->show();
-        addDockWidget(Qt::LeftDockWidgetArea, m_branchesDock);
-        addDockWidget(Qt::RightDockWidgetArea, m_detailsDock);
-        resizeDocks({m_branchesDock}, {240}, Qt::Horizontal);
-        resizeDocks({m_detailsDock}, {300}, Qt::Horizontal);
-    });
+    viewMenu->addAction(tr("Reset layout"), this, &MainWindow::resetLayout);
 
     restoreWindowLayout();
-    if (QSettings().value(QStringLiteral("windowState")).toByteArray().isEmpty()) {
-        resizeDocks({m_branchesDock}, {240}, Qt::Horizontal);
-        resizeDocks({m_detailsDock}, {300}, Qt::Horizontal);
+}
+
+void MainWindow::applySplitterStyle(QSplitter *splitter)
+{
+    if (!splitter) {
+        return;
+    }
+    splitter->setChildrenCollapsible(false);
+    splitter->setHandleWidth(kSplitterHandleWidth);
+    splitter->setStyleSheet(QStringLiteral(
+        "QSplitter::handle:horizontal {"
+        "  background-color: #aeb6c2;"
+        "  border-left: 1px solid #8a939f;"
+        "  border-right: 1px solid #8a939f;"
+        "}"
+        "QSplitter::handle:horizontal:hover {"
+        "  background-color: #3d7ab8;"
+        "}"));
+}
+
+void MainWindow::toggleBranchesPanel(bool visible)
+{
+    if (!m_branchPanel) {
+        return;
+    }
+    m_branchPanel->setVisible(visible);
+    if (visible && m_mainSplitter) {
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() >= 3 && sizes[0] < 80) {
+            sizes[0] = kDefaultBranchWidth;
+            m_mainSplitter->setSizes(sizes);
+        }
+    }
+}
+
+void MainWindow::toggleDetailsPanel(bool visible)
+{
+    if (!m_detailsPanelContainer) {
+        return;
+    }
+    m_detailsPanelContainer->setVisible(visible);
+    if (visible && m_mainSplitter) {
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() >= 3 && sizes[2] < 80) {
+            sizes[2] = kDefaultDetailsWidth;
+            m_mainSplitter->setSizes(sizes);
+        }
+    }
+}
+
+void MainWindow::focusHistoryPanel()
+{
+    if (m_toggleBranchesAction) {
+        m_toggleBranchesAction->setChecked(false);
+    }
+    if (m_toggleDetailsAction) {
+        m_toggleDetailsAction->setChecked(false);
+    }
+}
+
+void MainWindow::showWorkingTreeTab()
+{
+    if (m_toggleDetailsAction) {
+        m_toggleDetailsAction->setChecked(true);
+    }
+    if (m_detailsTabs && m_workingPanel) {
+        m_detailsTabs->setCurrentWidget(m_workingPanel);
+        refreshWorkingTree();
+    }
+}
+
+void MainWindow::resetLayout()
+{
+    QSettings settings;
+    settings.remove(QStringLiteral("windowGeometry"));
+    settings.remove(QStringLiteral("splitterState"));
+    settings.remove(QStringLiteral("windowState"));
+    resize(1200, 800);
+    if (m_toggleBranchesAction) {
+        m_toggleBranchesAction->setChecked(true);
+    }
+    if (m_toggleDetailsAction) {
+        m_toggleDetailsAction->setChecked(true);
+    }
+    if (m_mainSplitter) {
+        m_mainSplitter->setSizes({kDefaultBranchWidth, 700, kDefaultDetailsWidth});
     }
 }
 
@@ -161,12 +274,22 @@ void MainWindow::restoreWindowLayout()
 {
     QSettings settings;
     const QByteArray geometry = settings.value(QStringLiteral("windowGeometry")).toByteArray();
-    const QByteArray state = settings.value(QStringLiteral("windowState")).toByteArray();
     if (!geometry.isEmpty()) {
         restoreGeometry(geometry);
     }
-    if (!state.isEmpty()) {
-        restoreState(state);
+
+    const QByteArray splitterState = settings.value(QStringLiteral("splitterState")).toByteArray();
+    if (!splitterState.isEmpty() && m_mainSplitter) {
+        m_mainSplitter->restoreState(splitterState);
+    }
+
+    const bool branchesVisible = settings.value(QStringLiteral("branchesVisible"), true).toBool();
+    const bool detailsVisible = settings.value(QStringLiteral("detailsVisible"), true).toBool();
+    if (m_toggleBranchesAction) {
+        m_toggleBranchesAction->setChecked(branchesVisible);
+    }
+    if (m_toggleDetailsAction) {
+        m_toggleDetailsAction->setChecked(detailsVisible);
     }
 }
 
@@ -174,7 +297,15 @@ void MainWindow::saveWindowLayout()
 {
     QSettings settings;
     settings.setValue(QStringLiteral("windowGeometry"), saveGeometry());
-    settings.setValue(QStringLiteral("windowState"), saveState());
+    if (m_mainSplitter) {
+        settings.setValue(QStringLiteral("splitterState"), m_mainSplitter->saveState());
+    }
+    if (m_toggleBranchesAction) {
+        settings.setValue(QStringLiteral("branchesVisible"), m_toggleBranchesAction->isChecked());
+    }
+    if (m_toggleDetailsAction) {
+        settings.setValue(QStringLiteral("detailsVisible"), m_toggleDetailsAction->isChecked());
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -201,6 +332,7 @@ void MainWindow::refreshRepository()
     }
     reloadBranches();
     reloadLog(m_branchFilter);
+    refreshWorkingTree();
 }
 
 void MainWindow::setRepository(const QString &path)
@@ -213,22 +345,58 @@ void MainWindow::setRepository(const QString &path)
     }
 
     m_repo.setPath(topLevel);
+    m_detailsPanel->setRepoContext(topLevel, &m_git);
+    m_workingPanel->setRepoContext(topLevel, &m_git);
     m_logLimit = kInitialLogLimit;
     m_branchFilter.clear();
     saveRecentRepo(topLevel);
 
-    const QString branch = m_git.currentBranch(topLevel);
-    const bool dirty = m_git.hasUncommittedChanges(topLevel);
-    m_repoLabel->setText(tr("Repository: %1 — branch: %2%3")
-                             .arg(topLevel, branch, dirty ? tr(" (dirty)") : QString()));
-
     m_branchList->clearSelection();
     reloadBranches();
     reloadLog();
+    refreshWorkingTree();
+
+    if (m_git.hasUncommittedChanges(topLevel)) {
+        m_detailsTabs->setCurrentWidget(m_workingPanel);
+    }
 
     m_mergeButton->setEnabled(true);
     m_loadMoreButton->setEnabled(true);
     setStatusMessage(tr("Loaded %1").arg(topLevel));
+}
+
+void MainWindow::updateRepoLabel()
+{
+    if (!m_repo.isValid()) {
+        m_repoLabel->setText(tr("No repository"));
+        return;
+    }
+
+    const QString branch = m_git.currentBranch(m_repo.path());
+    const bool dirty = m_git.hasUncommittedChanges(m_repo.path());
+    QString html = tr("Repository: %1 — branch: %2")
+                       .arg(m_repo.path().toHtmlEscaped(), branch.toHtmlEscaped());
+    if (dirty) {
+        html += QStringLiteral(" — <a href=\"working\">") + tr("uncommitted changes")
+                + QStringLiteral("</a>");
+    }
+    m_repoLabel->setText(html);
+}
+
+void MainWindow::refreshWorkingTree()
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    m_workingPanel->refresh();
+    const bool dirty = m_git.hasUncommittedChanges(m_repo.path());
+    const int workingTabIndex = m_detailsTabs->indexOf(m_workingPanel);
+    if (workingTabIndex >= 0) {
+        m_detailsTabs->setTabText(workingTabIndex,
+                                  dirty ? tr("Working tree *") : tr("Working tree"));
+    }
+    updateRepoLabel();
 }
 
 void MainWindow::reloadBranches()

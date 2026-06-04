@@ -8,6 +8,9 @@ struct GitProcessResult {
     QString stdoutText;
     QString stderrText;
     bool success() const { return exitCode == 0; }
+
+    // git diff exits 1 when there are differences but still prints the patch
+    bool diffSucceeded() const { return exitCode == 0 || exitCode == 1; }
 };
 
 class GitProcessRunner {

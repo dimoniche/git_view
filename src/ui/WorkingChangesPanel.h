@@ -1,39 +1,41 @@
 #pragma once
 
-#include "core/CommitDetails.h"
-
-#include <QString>
+#include "core/WorkingTreeChange.h"
+#include "git/GitService.h"
 
 #include <QWidget>
+#include <vector>
 
 class QLabel;
 class QListWidget;
 class QPlainTextEdit;
-class GitService;
+class QComboBox;
 
-class CommitDetailsPanel : public QWidget {
+class WorkingChangesPanel : public QWidget {
     Q_OBJECT
 
 public:
-    explicit CommitDetailsPanel(QWidget *parent = nullptr);
+    explicit WorkingChangesPanel(QWidget *parent = nullptr);
 
     void setRepoContext(const QString &repoPath, GitService *git);
-    void showDetails(const CommitDetails &details);
-    void clear();
+    void refresh();
 
 private slots:
     void onFileSelectionChanged();
+    void onScopeChanged();
 
 private:
     void loadDiffForCurrentFile();
     void showDiffText(const QString &text, const QString &title);
+    void applyBestScopeForChange(const WorkingTreeChange &change);
+    WorkingDiffScope currentScope() const;
 
     QString m_repoPath;
     GitService *m_git = nullptr;
-    QString m_commitHash;
-    CommitDetails m_details;
+    std::vector<WorkingTreeChange> m_changes;
 
     QLabel *m_summaryLabel = nullptr;
+    QComboBox *m_scopeCombo = nullptr;
     QListWidget *m_filesList = nullptr;
     QLabel *m_diffTitle = nullptr;
     QPlainTextEdit *m_diffView = nullptr;

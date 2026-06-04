@@ -5,12 +5,17 @@ set(GIT_VIEW_SOURCES
     core/Repo.cpp
     core/GraphLayout.cpp
     core/CommitDetails.cpp
+    core/WorkingTreeChange.cpp
     git/GitProcessRunner.cpp
     git/LogParser.cpp
+    git/DiffParser.cpp
+    git/StatusParser.cpp
     git/GitService.cpp
     ui/MainWindow.cpp
     ui/CommitHistoryView.cpp
     ui/CommitDetailsPanel.cpp
+    ui/WorkingChangesPanel.cpp
+    ui/DiffHighlighter.cpp
 )
 
 add_executable(git_view ${GIT_VIEW_SOURCES})
