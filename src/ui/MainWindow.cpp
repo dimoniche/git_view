@@ -27,6 +27,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -548,7 +549,7 @@ void MainWindow::discardAllChanges()
     }
 
     QMessageBox::information(this, tr("Discard changes"), tr("All uncommitted changes were discarded."));
-    refreshRepository();
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
 void MainWindow::discardFileChanges(const QString &path)
@@ -583,7 +584,7 @@ void MainWindow::discardFileChanges(const QString &path)
     if (!found) {
         QMessageBox::information(this, tr("Discard changes"),
                                  tr("File \"%1\" has no pending changes.").arg(path));
-        refreshRepository();
+        QTimer::singleShot(0, this, &MainWindow::refreshRepository);
         return;
     }
 
@@ -615,7 +616,7 @@ void MainWindow::discardFileChanges(const QString &path)
 
     QMessageBox::information(this, tr("Discard changes"),
                              tr("Changes to \"%1\" were discarded.").arg(path));
-    refreshRepository();
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
 void MainWindow::updateWorkingTreeActions()
