@@ -16,6 +16,8 @@ public:
     void setRowHeight(int height);
     void setSelectedRow(int row);
     int naturalWidth() const;
+    int graphLanesWidth() const;
+    int labelAreaWidth() const;
     int rowHeight() const { return m_rowHeight; }
 
     QSize sizeHint() const override;
@@ -39,4 +41,6 @@ private:
 
     static constexpr int kLaneWidth = 18;
     static constexpr int kGraphPadding = 10;
+    static constexpr int kLabelPadding = 6;
+    static constexpr int kMaxLabelWidth = 180;
 };

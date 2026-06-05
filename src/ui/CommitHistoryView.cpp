@@ -120,10 +120,12 @@ bool CommitHistoryView::eventFilter(QObject *watched, QEvent *event)
     return QWidget::eventFilter(watched, event);
 }
 
-void CommitHistoryView::setCommits(const std::vector<Commit> &commits)
+void CommitHistoryView::setCommits(const std::vector<Commit> &commits,
+                                   const QString &branchTipHash,
+                                   const std::vector<Branch> &branches)
 {
     m_commits = commits;
-    m_layout = GraphLayout::build(m_commits);
+    m_layout = GraphLayout::build(m_commits, branchTipHash, branches);
     m_graph->setData(m_commits, m_layout);
 
     m_model->removeRows(0, m_model->rowCount());

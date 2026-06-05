@@ -20,6 +20,7 @@ class QScrollArea;
 class QTabWidget;
 class QSplitter;
 class QAction;
+class QMenu;
 class QWidget;
 
 class MainWindow : public QMainWindow {
@@ -68,6 +69,11 @@ private slots:
 private:
     void setupUi();
     void loadRecentRepos();
+    void restoreLastRepository();
+    void updateRecentReposMenu();
+    void clearRecentRepos();
+    void removeInvalidRecentRepo(const QString &path);
+    QStringList recentRepos() const;
     void saveRecentRepo(const QString &path);
     void restoreWindowLayout();
     void saveWindowLayout();
@@ -130,4 +136,5 @@ private:
     QAction *m_fetchAction = nullptr;
     QAction *m_pullAction = nullptr;
     QAction *m_toggleTerminalAction = nullptr;
+    QMenu *m_recentReposMenu = nullptr;
 };

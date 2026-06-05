@@ -52,7 +52,6 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setupUi();
     loadRecentRepos();
-    setStatusMessage(tr("Open a repository to begin"));
 }
 
 void MainWindow::setupUi()
@@ -91,6 +90,9 @@ void MainWindow::setupUi()
     auto *fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(newRepoAction);
     fileMenu->addAction(openAction);
+    m_recentReposMenu = fileMenu->addMenu(tr("Open &recent"));
+    m_recentReposMenu->setEnabled(false);
+    connect(m_recentReposMenu, &QMenu::aboutToShow, this, &MainWindow::updateRecentReposMenu);
     fileMenu->addAction(refreshAction);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
@@ -1225,7 +1227,8 @@ void MainWindow::reloadLog(const QString &branchFilter)
         return;
     }
 
-    m_historyView->setCommits(commits);
+    const QString branchTip = filter.isEmpty() || commits.empty() ? QString() : commits.front().hash;
+    m_historyView->setCommits(commits, branchTip, m_branches);
     const int shown = static_cast<int>(commits.size());
     const int total = m_git.commitCount(m_repo.path(), filter);
     const bool hasMore = shown >= m_logLimit && (total == 0 || shown < total);
@@ -2180,15 +2183,92 @@ void MainWindow::mergeSelectedBranch()
     }
 }
 
-void MainWindow::loadRecentRepos()
+QStringList MainWindow::recentRepos() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("recent"));
     const QStringList recent = settings.value(QStringLiteral("repos")).toStringList();
     settings.endGroup();
-    if (!recent.isEmpty() && !m_repo.isValid()) {
-        setStatusMessage(tr("Recent: %1").arg(recent.first()));
+    return recent;
+}
+
+void MainWindow::loadRecentRepos()
+{
+    updateRecentReposMenu();
+    QTimer::singleShot(0, this, &MainWindow::restoreLastRepository);
+}
+
+void MainWindow::restoreLastRepository()
+{
+    if (m_repo.isValid()) {
+        return;
     }
+
+    for (const QString &path : recentRepos()) {
+        if (!QFileInfo::exists(path)) {
+            removeInvalidRecentRepo(path);
+            continue;
+        }
+
+        const QString topLevel = m_git.discoverGitDir(path);
+        if (topLevel.isEmpty()) {
+            removeInvalidRecentRepo(path);
+            continue;
+        }
+
+        setRepository(path);
+        return;
+    }
+
+    setStatusMessage(tr("Open a repository to begin"));
+}
+
+void MainWindow::updateRecentReposMenu()
+{
+    if (!m_recentReposMenu) {
+        return;
+    }
+
+    m_recentReposMenu->clear();
+    const QStringList recent = recentRepos();
+    if (recent.isEmpty()) {
+        auto *emptyAction = m_recentReposMenu->addAction(tr("(No recent repositories)"));
+        emptyAction->setEnabled(false);
+        m_recentReposMenu->setEnabled(false);
+        return;
+    }
+
+    m_recentReposMenu->setEnabled(true);
+    for (const QString &path : recent) {
+        QAction *action = m_recentReposMenu->addAction(QDir::toNativeSeparators(path));
+        action->setToolTip(path);
+        action->setStatusTip(path);
+        connect(action, &QAction::triggered, this, [this, path]() { setRepository(path); });
+    }
+
+    m_recentReposMenu->addSeparator();
+    m_recentReposMenu->addAction(tr("Clear list…"), this, [this]() { clearRecentRepos(); });
+}
+
+void MainWindow::clearRecentRepos()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("recent"));
+    settings.remove(QStringLiteral("repos"));
+    settings.endGroup();
+    updateRecentReposMenu();
+    setStatusMessage(tr("Recent repositories list cleared"));
+}
+
+void MainWindow::removeInvalidRecentRepo(const QString &path)
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("recent"));
+    QStringList recent = settings.value(QStringLiteral("repos")).toStringList();
+    recent.removeAll(path);
+    settings.setValue(QStringLiteral("repos"), recent);
+    settings.endGroup();
+    updateRecentReposMenu();
 }
 
 void MainWindow::saveRecentRepo(const QString &path)
@@ -2202,7 +2282,9 @@ void MainWindow::saveRecentRepo(const QString &path)
         recent.removeLast();
     }
     settings.setValue(QStringLiteral("repos"), recent);
+    settings.setValue(QStringLiteral("last"), path);
     settings.endGroup();
+    updateRecentReposMenu();
 }
 
 void MainWindow::setStatusMessage(const QString &message)

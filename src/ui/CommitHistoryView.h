@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Branch.h"
 #include "core/Commit.h"
 #include "core/GraphLayout.h"
 
@@ -18,7 +19,9 @@ class CommitHistoryView : public QWidget {
 public:
     explicit CommitHistoryView(QWidget *parent = nullptr);
 
-    void setCommits(const std::vector<Commit> &commits);
+    void setCommits(const std::vector<Commit> &commits,
+                    const QString &branchTipHash = {},
+                    const std::vector<Branch> &branches = {});
     int selectedRow() const { return m_selectedRow; }
     QString selectedHash() const;
 

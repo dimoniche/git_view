@@ -1,6 +1,7 @@
 #include "ui/CommitGraphWidget.h"
 
 #include <QColor>
+#include <QFontMetrics>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
@@ -86,10 +87,29 @@ void CommitGraphWidget::setSelectedRow(int row)
     update();
 }
 
-int CommitGraphWidget::naturalWidth() const
+int CommitGraphWidget::graphLanesWidth() const
 {
     const int lanes = std::max(1, m_layout.laneCount);
     return kGraphPadding * 2 + lanes * kLaneWidth;
+}
+
+int CommitGraphWidget::labelAreaWidth() const
+{
+    if (m_layout.laneLabels.empty()) {
+        return 0;
+    }
+
+    const QFontMetrics fm(font());
+    int maxWidth = 0;
+    for (const GraphLaneLabel &label : m_layout.laneLabels) {
+        maxWidth = std::max(maxWidth, fm.horizontalAdvance(label.name));
+    }
+    return std::min(maxWidth, kMaxLabelWidth) + kLabelPadding;
+}
+
+int CommitGraphWidget::naturalWidth() const
+{
+    return graphLanesWidth() + labelAreaWidth();
 }
 
 QSize CommitGraphWidget::sizeHint() const
@@ -164,6 +184,32 @@ void CommitGraphWidget::paintEvent(QPaintEvent *event)
                               : QPen(Qt::NoPen));
         const int radius = m_commits[row].isMerge() ? 7 : 6;
         painter.drawEllipse(QPoint(cx, cy), radius, radius);
+    }
+
+    if (!m_layout.laneLabels.empty()) {
+        const QFontMetrics fm(painter.font());
+        const int labelX = graphLanesWidth() + kLabelPadding;
+        const int labelWidth = width() - labelX;
+
+        painter.setPen(palette().color(QPalette::Text));
+        for (const GraphLaneLabel &label : m_layout.laneLabels) {
+            if (label.lane <= 0 || label.name.isEmpty()) {
+                continue;
+            }
+
+            const int y = rowY(label.row);
+            const bool selected = label.row == m_selectedRow;
+            if (selected) {
+                painter.setPen(palette().color(QPalette::HighlightedText));
+            } else {
+                painter.setPen(palette().color(QPalette::Text));
+            }
+
+            const QString text =
+                fm.elidedText(label.name, Qt::ElideRight, std::max(20, labelWidth));
+            painter.drawText(labelX, y, labelWidth, m_rowHeight, Qt::AlignLeft | Qt::AlignVCenter,
+                             text);
+        }
     }
 }
 
