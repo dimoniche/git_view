@@ -40,8 +40,11 @@ public:
     std::vector<Commit> logBranch(const QString &repoPath,
                                   const QString &branch,
                                   int maxCount = 500) const;
+    int commitCount(const QString &repoPath, const QString &branch = {}) const;
     std::vector<Branch> branches(const QString &repoPath) const;
     QString currentBranch(const QString &repoPath) const;
+    QString displayBranchName(const QString &repoPath) const;
+    static bool isPseudoDetachedBranchName(const QString &name);
     BranchSyncCounts currentBranchSyncCounts(const QString &repoPath) const;
     bool hasUncommittedChanges(const QString &repoPath) const;
     bool hasStagedChanges(const QString &repoPath) const;
@@ -87,6 +90,8 @@ public:
     GitProcessResult pullBranch(const QString &repoPath,
                                 const QString &remote,
                                 const QString &branchName) const;
+    GitProcessResult fetchAll(const QString &repoPath) const;
+    GitProcessResult fetchRemote(const QString &repoPath, const QString &remote) const;
 
     GitProcessResult merge(const QString &repoPath,
                            const QString &branch,

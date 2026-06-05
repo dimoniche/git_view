@@ -40,6 +40,9 @@ private slots:
     void createBranch(const QString &startPointHint = {});
     void focusCommitDetails(const QString &hash);
     void loadMoreCommits();
+    void loadAllCommits();
+    void filterLogToBranch(int row);
+    void showAllCommits();
     void onCommitSelected(const QString &hash);
     void toggleBranchesPanel(bool visible);
     void toggleDetailsPanel(bool visible);
@@ -49,6 +52,7 @@ private slots:
     void discardFileChanges(const QString &path);
     void addPathToGitignore(const QString &path);
     void checkoutBranch(const Branch &branch);
+    void checkoutSelectedBranch();
     void deleteBranch(const Branch &branch);
     void publishBranch(const Branch &branch);
     void pushBranch(const Branch &branch);
@@ -56,6 +60,7 @@ private slots:
     Branch currentLocalBranch() const;
     void pullBranch(const Branch &branch);
     void pullCurrentBranch();
+    void fetchRemotes();
     void publishOrPushSelectedBranch();
     void configureRemotes();
     void showBranchContextMenu(const QPoint &pos);
@@ -83,6 +88,7 @@ private:
     Branch branchAtRow(int row) const;
     Branch branchForActions() const;
     QString pickRemoteForBranch(const Branch &branch, const QString &title);
+    QString pickRemoteForFetch(const QString &title);
 
     GitService m_git;
     Repo m_repo;
@@ -97,13 +103,16 @@ private:
     CommitDetailsPanel *m_detailsPanel = nullptr;
     WorkingChangesPanel *m_workingPanel = nullptr;
     QTabWidget *m_detailsTabs = nullptr;
-    QScrollArea *m_historyScroll = nullptr;
+    QPushButton *m_checkoutButton = nullptr;
     QPushButton *m_createBranchButton = nullptr;
     QPushButton *m_publishBranchButton = nullptr;
+    QPushButton *m_fetchButton = nullptr;
     QPushButton *m_pullButton = nullptr;
     QPushButton *m_mergeButton = nullptr;
     QPushButton *m_remotesButton = nullptr;
+    QPushButton *m_showAllCommitsButton = nullptr;
     QPushButton *m_loadMoreButton = nullptr;
+    QPushButton *m_loadAllButton = nullptr;
 
     QSplitter *m_rootSplitter = nullptr;
     QSplitter *m_mainSplitter = nullptr;
@@ -116,7 +125,9 @@ private:
     QAction *m_commitAction = nullptr;
     QAction *m_discardAllAction = nullptr;
     QAction *m_discardFileAction = nullptr;
+    QAction *m_checkoutAction = nullptr;
     QAction *m_publishBranchAction = nullptr;
+    QAction *m_fetchAction = nullptr;
     QAction *m_pullAction = nullptr;
     QAction *m_toggleTerminalAction = nullptr;
 };

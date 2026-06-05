@@ -1,92 +1,153 @@
 #include "ui/CommitHistoryView.h"
 
-#include <QColor>
-#include <QContextMenuEvent>
-#include <QFont>
-#include <QFontMetrics>
+#include "ui/CommitGraphWidget.h"
+
+#include <QApplication>
+#include <QEvent>
 #include <QGuiApplication>
 #include <QClipboard>
+#include <QHBoxLayout>
+#include <QHeaderView>
 #include <QMenu>
-#include <QMouseEvent>
-#include <QPainter>
-#include <QPen>
-#include <QResizeEvent>
-#include <QSizePolicy>
-
-namespace {
-
-QColor laneColor(int lane)
-{
-    static const QColor palette[] = {
-        QColor(0x20, 0x99, 0x6b),
-        QColor(0x35, 0x7a, 0xbd),
-        QColor(0xc0, 0x5a, 0x1a),
-        QColor(0x8e, 0x44, 0xad),
-        QColor(0xc0, 0x39, 0x2b),
-        QColor(0x16, 0xa0, 0x85),
-        QColor(0xd4, 0xac, 0x0d),
-        QColor(0x7f, 0x8c, 0x8d),
-    };
-    return palette[lane % (sizeof(palette) / sizeof(palette[0]))];
-}
-
-void drawEdge(QPainter &painter, const GraphEdge &edge, int headerHeight)
-{
-    constexpr int rowHeight = 34;
-    constexpr int laneWidth = 18;
-    constexpr int graphPadding = 10;
-
-    const int fromY = headerHeight + edge.fromRow * rowHeight + rowHeight / 2;
-    const int toY = headerHeight + edge.toRow * rowHeight + rowHeight / 2;
-    const int fromX = graphPadding + edge.fromLane * laneWidth + laneWidth / 2;
-    const int toX = graphPadding + edge.toLane * laneWidth + laneWidth / 2;
-
-    QPen pen(QColor(0xbb, 0xbb, 0xbb));
-    pen.setWidth(2);
-    painter.setPen(pen);
-
-    if (edge.fromRow + 1 == edge.toRow) {
-        painter.drawLine(fromX, fromY, toX, toY);
-        return;
-    }
-
-    const int midY = (fromY + toY) / 2;
-    painter.drawLine(fromX, fromY, fromX, midY);
-    if (fromX != toX) {
-        painter.drawLine(fromX, midY, toX, midY);
-    }
-    painter.drawLine(toX, midY, toX, toY);
-}
-
-} // namespace
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSplitter>
+#include <QStandardItemModel>
+#include <QTableView>
+#include <QVBoxLayout>
 
 CommitHistoryView::CommitHistoryView(QWidget *parent)
     : QWidget(parent)
 {
-    setMouseTracking(false);
-    setBackgroundRole(QPalette::Base);
-    setAutoFillBackground(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-    QFont viewFont = font();
-    if (viewFont.pointSize() > 0) {
-        viewFont.setPointSize(viewFont.pointSize() + 1);
-    } else {
-        viewFont.setPixelSize(14);
+    auto *layout = new QHBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    layout->addWidget(m_splitter);
+
+    m_graphColumn = new QWidget(m_splitter);
+    auto *graphColumnLayout = new QVBoxLayout(m_graphColumn);
+    graphColumnLayout->setContentsMargins(0, 0, 0, 0);
+    graphColumnLayout->setSpacing(0);
+
+    m_graphHeader = new QWidget(m_graphColumn);
+    m_graphHeader->setFixedHeight(kDefaultHeaderHeight);
+    m_graphHeader->setAutoFillBackground(true);
+    m_graphHeader->setBackgroundRole(QPalette::Midlight);
+    graphColumnLayout->addWidget(m_graphHeader);
+
+    m_graphScroll = new QScrollArea(m_graphColumn);
+    m_graphScroll->setWidgetResizable(false);
+    m_graphScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_graphScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_graphScroll->setFrameShape(QFrame::NoFrame);
+    m_graphScroll->setFocusPolicy(Qt::NoFocus);
+    graphColumnLayout->addWidget(m_graphScroll, 1);
+
+    m_graph = new CommitGraphWidget;
+    m_graphScroll->setWidget(m_graph);
+    m_splitter->addWidget(m_graphColumn);
+
+    m_table = new QTableView(m_splitter);
+    m_model = new QStandardItemModel(0, 4, this);
+    m_model->setHorizontalHeaderLabels(
+        {tr("Hash"), tr("Author"), tr("Date"), tr("Subject")});
+    m_table->setModel(m_model);
+    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setShowGrid(false);
+    m_table->setAlternatingRowColors(true);
+    m_table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_table->verticalHeader()->hide();
+    m_table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    m_table->verticalHeader()->setDefaultSectionSize(kRowHeight);
+    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_table->horizontalHeader()->setStretchLastSection(true);
+    m_table->horizontalHeader()->setMinimumSectionSize(40);
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_table->setColumnWidth(0, 80);
+    m_table->setColumnWidth(1, 140);
+    m_table->setColumnWidth(2, 170);
+    m_splitter->addWidget(m_table);
+
+    m_splitter->setStretchFactor(0, 0);
+    m_splitter->setStretchFactor(1, 1);
+    m_splitter->setSizes({220, 700});
+
+    connect(m_graph, &CommitGraphWidget::rowClicked, this,
+            [this](int row) { selectRow(row, true); });
+    connect(m_table->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
+            [this](const QModelIndex &current, const QModelIndex &previous) {
+                Q_UNUSED(previous);
+                if (m_syncingSelection || !current.isValid()) {
+                    return;
+                }
+                selectRow(current.row(), false);
+            });
+    connect(m_table, &QTableView::customContextMenuRequested, this,
+            [this](const QPoint &pos) {
+                const QModelIndex index = m_table->indexAt(pos);
+                if (index.isValid()) {
+                    showCommitContextMenu(index.row(), m_table->viewport()->mapToGlobal(pos));
+                }
+            });
+
+    connect(m_table->verticalScrollBar(), &QScrollBar::valueChanged, this,
+            [this](int) { syncGraphScrollFromTable(); });
+    connect(m_graphScroll->verticalScrollBar(), &QScrollBar::valueChanged, this,
+            [this](int) { syncTableScrollFromGraph(); });
+
+    m_table->horizontalHeader()->installEventFilter(this);
+    m_table->verticalHeader()->installEventFilter(this);
+    m_graphScroll->viewport()->installEventFilter(this);
+}
+
+bool CommitHistoryView::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_graphScroll->viewport() && event->type() == QEvent::Wheel) {
+        QApplication::sendEvent(m_table->viewport(), event);
+        return true;
     }
-    setFont(viewFont);
+
+    if ((watched == m_table->horizontalHeader() || watched == m_table->verticalHeader())
+        && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+        updateGraphGeometry();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void CommitHistoryView::setCommits(const std::vector<Commit> &commits)
 {
     m_commits = commits;
     m_layout = GraphLayout::build(m_commits);
-    m_selectedRow = m_commits.empty() ? -1 : 0;
-    updateContentGeometry();
-    update();
-    if (!m_commits.empty()) {
-        emit commitSelected(m_commits.front().hash);
+    m_graph->setData(m_commits, m_layout);
+
+    m_model->removeRows(0, m_model->rowCount());
+    for (const Commit &commit : m_commits) {
+        QList<QStandardItem *> row;
+        auto *hashItem = new QStandardItem(commit.hash.left(8));
+        auto *authorItem = new QStandardItem(commit.author);
+        auto *dateItem = new QStandardItem(commit.date);
+        auto *subjectItem = new QStandardItem(commit.subject);
+        for (QStandardItem *item : {hashItem, authorItem, dateItem, subjectItem}) {
+            item->setEditable(false);
+        }
+        row << hashItem << authorItem << dateItem << subjectItem;
+        m_model->appendRow(row);
     }
+
+    updateGraphGeometry();
+
+    if (m_commits.empty()) {
+        m_selectedRow = -1;
+        return;
+    }
+
+    selectRow(0, false);
 }
 
 QString CommitHistoryView::selectedHash() const
@@ -97,197 +158,93 @@ QString CommitHistoryView::selectedHash() const
     return m_commits[static_cast<size_t>(m_selectedRow)].hash;
 }
 
-int CommitHistoryView::contentHeight() const
+void CommitHistoryView::updateGraphGeometry()
 {
-    return kHeaderHeight + static_cast<int>(m_commits.size()) * kRowHeight;
+    int headerHeight = m_table->horizontalHeader()->height();
+    if (headerHeight <= 0) {
+        headerHeight = kDefaultHeaderHeight;
+    }
+
+    int rowHeight = m_table->verticalHeader()->sectionSize(0);
+    if (rowHeight <= 0) {
+        rowHeight = kRowHeight;
+    }
+    m_table->verticalHeader()->setDefaultSectionSize(rowHeight);
+    m_graph->setRowHeight(rowHeight);
+
+    const int rows = static_cast<int>(m_commits.size());
+    const int height = rows * rowHeight;
+    const int width = m_graph->naturalWidth();
+
+    m_graphHeader->setFixedHeight(headerHeight);
+    m_graph->setFixedSize(std::max(width, 1), std::max(height, 1));
+
+    QScrollBar *tableBar = m_table->verticalScrollBar();
+    QScrollBar *graphBar = m_graphScroll->verticalScrollBar();
+    graphBar->setRange(tableBar->minimum(), tableBar->maximum());
+    graphBar->setPageStep(tableBar->pageStep());
+    graphBar->setSingleStep(tableBar->singleStep());
+
+    syncGraphScrollFromTable();
 }
 
-void CommitHistoryView::updateContentGeometry()
+void CommitHistoryView::syncGraphScrollFromTable()
 {
-    const int contentH = std::max(contentHeight(), height());
-    setMinimumHeight(contentH);
-    updateGeometry();
-}
-
-QSize CommitHistoryView::sizeHint() const
-{
-    const int w = graphWidth() + kTextLeftPad + kHashWidth + kAuthorWidth + kDateWidth + 400;
-    return {w, std::max(contentHeight(), 400)};
-}
-
-QSize CommitHistoryView::minimumSizeHint() const
-{
-    return {600, std::max(contentHeight(), 300)};
-}
-
-int CommitHistoryView::graphWidth() const
-{
-    return kGraphPadding * 2 + std::max(1, m_layout.laneCount) * kLaneWidth;
-}
-
-int CommitHistoryView::rowY(int row) const
-{
-    return kHeaderHeight + row * kRowHeight;
-}
-
-QRect CommitHistoryView::graphRect() const
-{
-    return {0, kHeaderHeight, graphWidth(), static_cast<int>(m_commits.size()) * kRowHeight};
-}
-
-void CommitHistoryView::resizeEvent(QResizeEvent *event)
-{
-    QWidget::resizeEvent(event);
-    updateContentGeometry();
-}
-
-void CommitHistoryView::paintEvent(QPaintEvent *event)
-{
-    Q_UNUSED(event);
-
-    QPainter painter(this);
-    painter.fillRect(rect(), palette().color(QPalette::Base));
-
-    const int textX = graphWidth() + kTextLeftPad;
-    const QFontMetrics fm(painter.font());
-    const QFont headerFont = [](const QFont &base) {
-        QFont font = base;
-        font.setBold(true);
-        return font;
-    }(painter.font());
-
-    painter.fillRect(0, 0, width(), kHeaderHeight, palette().color(QPalette::Midlight));
-    painter.setFont(headerFont);
-    painter.setPen(palette().color(QPalette::WindowText));
-
-    int colX = textX;
-    painter.drawText(colX, 0, kHashWidth, kHeaderHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                     tr("Hash"));
-    colX += kHashWidth;
-    painter.drawText(colX, 0, kAuthorWidth, kHeaderHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                     tr("Author"));
-    colX += kAuthorWidth;
-    painter.drawText(colX, 0, kDateWidth, kHeaderHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                     tr("Date"));
-    colX += kDateWidth;
-    painter.drawText(colX, 0, width() - colX - 8, kHeaderHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                     tr("Subject"));
-
-    painter.setFont(font());
-    painter.drawLine(0, kHeaderHeight - 1, width(), kHeaderHeight - 1);
-
-    if (m_commits.empty()) {
-        painter.setPen(palette().color(QPalette::Text));
-        painter.drawText(QRect(0, kHeaderHeight, width(), height() - kHeaderHeight),
-                         Qt::AlignCenter, tr("No commits"));
+    if (m_syncingScroll) {
         return;
     }
 
-    const QRect graphArea = graphRect();
-    const int textAreaWidth = std::max(0, width() - textX);
-
-    for (size_t row = 0; row < m_commits.size(); ++row) {
-        const int y = rowY(static_cast<int>(row));
-        const QRect textRowRect(textX, y, textAreaWidth, kRowHeight);
-
-        if (static_cast<int>(row) == m_selectedRow) {
-            painter.fillRect(textRowRect, palette().color(QPalette::Highlight));
-        } else if (row % 2 == 1) {
-            painter.fillRect(textRowRect, palette().color(QPalette::AlternateBase));
-        }
-    }
-
-    painter.setClipRect(graphArea);
-    for (const GraphEdge &edge : m_layout.edges) {
-        drawEdge(painter, edge, kHeaderHeight);
-    }
-    painter.setClipping(false);
-
-    for (size_t row = 0; row < m_commits.size(); ++row) {
-        const int y = rowY(static_cast<int>(row));
-
-        const int lane = m_layout.lanes[row];
-        const int cx = kGraphPadding + lane * kLaneWidth + kLaneWidth / 2;
-        const int cy = y + kRowHeight / 2;
-        const QColor color = laneColor(lane);
-        painter.setBrush(color);
-        painter.setPen(Qt::NoPen);
-        const int radius = m_commits[row].isMerge() ? 7 : 6;
-        painter.drawEllipse(QPoint(cx, cy), radius, radius);
-
-        const Commit &commit = m_commits[row];
-        const bool selected = static_cast<int>(row) == m_selectedRow;
-        const QColor textColor =
-            selected ? palette().color(QPalette::HighlightedText)
-                     : palette().color(QPalette::Text);
-        painter.setPen(textColor);
-
-        colX = textX;
-        const QString hash = commit.hash.left(8);
-        painter.drawText(colX, y, kHashWidth, kRowHeight, Qt::AlignLeft | Qt::AlignVCenter, hash);
-        colX += kHashWidth;
-
-        const QString author = fm.elidedText(commit.author, Qt::ElideRight, kAuthorWidth);
-        painter.drawText(colX, y, kAuthorWidth, kRowHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                         author);
-        colX += kAuthorWidth;
-
-        const QString date = fm.elidedText(commit.date, Qt::ElideRight, kDateWidth);
-        painter.drawText(colX, y, kDateWidth, kRowHeight, Qt::AlignLeft | Qt::AlignVCenter, date);
-        colX += kDateWidth;
-
-        const int subjectWidth = width() - colX - 8;
-        const QString subject =
-            fm.elidedText(commit.subject, Qt::ElideRight, std::max(80, subjectWidth));
-        painter.drawText(colX, y, subjectWidth, kRowHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                         subject);
-    }
+    m_syncingScroll = true;
+    m_graphScroll->verticalScrollBar()->setValue(m_table->verticalScrollBar()->value());
+    m_syncingScroll = false;
 }
 
-void CommitHistoryView::selectRow(int row)
+void CommitHistoryView::syncTableScrollFromGraph()
 {
-    if (row < 0 || row >= static_cast<int>(m_commits.size()) || row == m_selectedRow) {
+    if (m_syncingScroll) {
         return;
     }
-    m_selectedRow = row;
-    update();
-    emit commitSelected(m_commits[static_cast<size_t>(row)].hash);
+
+    m_syncingScroll = true;
+    m_table->verticalScrollBar()->setValue(m_graphScroll->verticalScrollBar()->value());
+    m_syncingScroll = false;
 }
 
-void CommitHistoryView::mousePressEvent(QMouseEvent *event)
+void CommitHistoryView::selectRow(int row, bool scrollIntoView)
 {
-    if (event->button() == Qt::RightButton) {
-        const int row = rowAtY(static_cast<int>(event->position().y()));
-        if (row >= 0 && row < static_cast<int>(m_commits.size())) {
-            selectRow(row);
-            showCommitContextMenu(row, event->globalPosition().toPoint());
-        }
-        return;
-    }
-
-    if (event->button() != Qt::LeftButton) {
-        return;
-    }
-
-    const int row = rowAtY(static_cast<int>(event->position().y()));
     if (row < 0 || row >= static_cast<int>(m_commits.size())) {
         return;
     }
-    selectRow(row);
-}
 
-void CommitHistoryView::contextMenuEvent(QContextMenuEvent *event)
-{
-    const int row = rowAtY(event->pos().y());
-    if (row < 0 || row >= static_cast<int>(m_commits.size())) {
-        return;
+    m_syncingSelection = true;
+
+    if (row != m_selectedRow) {
+        m_selectedRow = row;
+        m_graph->setSelectedRow(row);
+        emit commitSelected(m_commits[static_cast<size_t>(row)].hash);
+    } else {
+        m_graph->setSelectedRow(row);
     }
-    selectRow(row);
-    showCommitContextMenu(row, event->globalPos());
+
+    const QModelIndex index = m_model->index(row, 0);
+    if (index.isValid()) {
+        m_table->setCurrentIndex(index);
+        if (scrollIntoView) {
+            m_table->scrollTo(index, QAbstractItemView::PositionAtCenter);
+            syncGraphScrollFromTable();
+        }
+    }
+
+    m_syncingSelection = false;
 }
 
 void CommitHistoryView::showCommitContextMenu(int row, const QPoint &globalPos)
 {
+    if (row < 0 || row >= static_cast<int>(m_commits.size())) {
+        return;
+    }
+
+    selectRow(row, true);
     const Commit &commit = m_commits[static_cast<size_t>(row)];
 
     QMenu menu(this);
@@ -320,16 +277,4 @@ void CommitHistoryView::showCommitContextMenu(int row, const QPoint &globalPos)
     });
 
     menu.exec(globalPos);
-}
-
-int CommitHistoryView::rowAtY(int y) const
-{
-    if (y < kHeaderHeight) {
-        return -1;
-    }
-    const int row = (y - kHeaderHeight) / kRowHeight;
-    if (row < 0 || row >= static_cast<int>(m_commits.size())) {
-        return -1;
-    }
-    return row;
 }

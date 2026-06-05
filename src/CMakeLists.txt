@@ -12,6 +12,7 @@ set(GIT_VIEW_SOURCES
     git/StatusParser.cpp
     git/GitService.cpp
     ui/MainWindow.cpp
+    ui/CommitGraphWidget.cpp
     ui/CommitHistoryView.cpp
     ui/CommitDetailsPanel.cpp
     ui/WorkingChangesPanel.cpp

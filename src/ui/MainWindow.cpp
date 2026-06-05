@@ -78,6 +78,11 @@ void MainWindow::setupUi()
     connect(m_publishBranchAction, &QAction::triggered, this,
             &MainWindow::publishOrPushSelectedBranch);
 
+    m_fetchAction = new QAction(tr("Fetch…"), this);
+    m_fetchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
+    m_fetchAction->setEnabled(false);
+    connect(m_fetchAction, &QAction::triggered, this, &MainWindow::fetchRemotes);
+
     m_pullAction = new QAction(tr("Pull…"), this);
     m_pullAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
     m_pullAction->setEnabled(false);
@@ -96,6 +101,7 @@ void MainWindow::setupUi()
     toolbar->addAction(openAction);
     toolbar->addAction(refreshAction);
     toolbar->addAction(m_publishBranchAction);
+    toolbar->addAction(m_fetchAction);
     toolbar->addAction(m_pullAction);
     toolbar->addSeparator();
 
@@ -115,6 +121,11 @@ void MainWindow::setupUi()
     m_commitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
     m_commitAction->setEnabled(false);
     connect(m_commitAction, &QAction::triggered, this, &MainWindow::commitChanges);
+
+    m_checkoutAction = new QAction(tr("Checkout branch…"), this);
+    m_checkoutAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
+    m_checkoutAction->setEnabled(false);
+    connect(m_checkoutAction, &QAction::triggered, this, &MainWindow::checkoutSelectedBranch);
 
     auto *newBranchAction = new QAction(tr("New branch…"), this);
     newBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
@@ -137,9 +148,11 @@ void MainWindow::setupUi()
     connect(configureRemotesAction, &QAction::triggered, this, &MainWindow::configureRemotes);
 
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
+    repoMenu->addAction(m_checkoutAction);
     repoMenu->addAction(newBranchAction);
     repoMenu->addAction(configureRemotesAction);
     repoMenu->addAction(m_publishBranchAction);
+    repoMenu->addAction(m_fetchAction);
     repoMenu->addAction(m_pullAction);
     repoMenu->addAction(m_commitAction);
     repoMenu->addSeparator();
@@ -173,9 +186,16 @@ void MainWindow::setupUi()
     m_branchList = new QListWidget(m_branchPanel);
     m_branchList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_branchList, &QListWidget::currentRowChanged, this, &MainWindow::onBranchSelected);
+    connect(m_branchList, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem *) { checkoutSelectedBranch(); });
     connect(m_branchList, &QWidget::customContextMenuRequested, this,
             &MainWindow::showBranchContextMenu);
     branchLayout->addWidget(m_branchList, 1);
+    m_checkoutButton = new QPushButton(tr("Checkout…"), m_branchPanel);
+    m_checkoutButton->setEnabled(false);
+    m_checkoutButton->setToolTip(tr("Switch to the selected branch (double-click in the list)"));
+    connect(m_checkoutButton, &QPushButton::clicked, this, &MainWindow::checkoutSelectedBranch);
+    branchLayout->addWidget(m_checkoutButton);
     m_createBranchButton = new QPushButton(tr("New branch…"), m_branchPanel);
     m_createBranchButton->setEnabled(false);
     connect(m_createBranchButton, &QPushButton::clicked, this, [this]() { createBranch(); });
@@ -188,6 +208,13 @@ void MainWindow::setupUi()
     connect(m_publishBranchButton, &QPushButton::clicked, this,
             &MainWindow::publishOrPushSelectedBranch);
     branchLayout->addWidget(m_publishBranchButton);
+
+    m_fetchButton = new QPushButton(tr("Fetch…"), m_branchPanel);
+    m_fetchButton->setEnabled(false);
+    m_fetchButton->setToolTip(
+        tr("Download commits from remotes and remove deleted remote branches (git fetch --prune)"));
+    connect(m_fetchButton, &QPushButton::clicked, this, &MainWindow::fetchRemotes);
+    branchLayout->addWidget(m_fetchButton);
 
     m_pullButton = new QPushButton(tr("Pull…"), m_branchPanel);
     m_pullButton->setEnabled(false);
@@ -210,24 +237,33 @@ void MainWindow::setupUi()
     auto *historyColumn = new QWidget(m_mainSplitter);
     auto *historyLayout = new QVBoxLayout(historyColumn);
     historyLayout->setContentsMargins(0, 0, 0, 0);
-    m_historyScroll = new QScrollArea(historyColumn);
-    m_historyScroll->setWidgetResizable(true);
-    m_historyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_historyScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_historyScroll->setFrameShape(QFrame::StyledPanel);
-    m_historyView = new CommitHistoryView;
+    m_historyView = new CommitHistoryView(historyColumn);
     connect(m_historyView, &CommitHistoryView::commitSelected, this,
             &MainWindow::onCommitSelected);
     connect(m_historyView, &CommitHistoryView::viewCommitDetailsRequested, this,
             &MainWindow::focusCommitDetails);
     connect(m_historyView, &CommitHistoryView::createBranchFromCommitRequested, this,
             [this](const QString &hash) { createBranch(hash); });
-    m_historyScroll->setWidget(m_historyView);
-    historyLayout->addWidget(m_historyScroll, 1);
+    historyLayout->addWidget(m_historyView, 1);
+    auto *historyButtons = new QHBoxLayout();
+    m_showAllCommitsButton = new QPushButton(tr("Show all commits"), historyColumn);
+    m_showAllCommitsButton->setVisible(false);
+    m_showAllCommitsButton->setToolTip(tr("Show commit history for all branches"));
+    connect(m_showAllCommitsButton, &QPushButton::clicked, this, &MainWindow::showAllCommits);
+    historyButtons->addWidget(m_showAllCommitsButton);
+
     m_loadMoreButton = new QPushButton(tr("Load more commits…"), historyColumn);
     m_loadMoreButton->setEnabled(false);
     connect(m_loadMoreButton, &QPushButton::clicked, this, &MainWindow::loadMoreCommits);
-    historyLayout->addWidget(m_loadMoreButton);
+    historyButtons->addWidget(m_loadMoreButton);
+
+    m_loadAllButton = new QPushButton(tr("Load all commits…"), historyColumn);
+    m_loadAllButton->setEnabled(false);
+    m_loadAllButton->setToolTip(tr("Load the full commit history (may be slow on large repos)"));
+    connect(m_loadAllButton, &QPushButton::clicked, this, &MainWindow::loadAllCommits);
+    historyButtons->addWidget(m_loadAllButton);
+    historyButtons->addStretch();
+    historyLayout->addLayout(historyButtons);
     m_mainSplitter->addWidget(historyColumn);
 
     m_detailsPanelContainer = new QWidget(m_mainSplitter);
@@ -957,7 +993,7 @@ void MainWindow::updateRepoLabel()
         return;
     }
 
-    const QString branch = m_git.currentBranch(m_repo.path());
+    const QString branch = m_git.displayBranchName(m_repo.path());
     const bool dirty = m_git.hasUncommittedChanges(m_repo.path());
     QString html = tr("Repository: %1 — branch: %2")
                        .arg(m_repo.path().toHtmlEscaped(), branch.toHtmlEscaped());
@@ -1042,6 +1078,25 @@ void MainWindow::updateBranchActions()
         m_createBranchButton->setEnabled(repoOpen);
     }
 
+    const int selectedRow = m_branchList ? m_branchList->currentRow() : -1;
+    const Branch selectedBranch = branchAtRow(selectedRow);
+    const bool canCheckout =
+        repoOpen && selectedRow >= 0 && !selectedBranch.name.isEmpty() && !selectedBranch.isCurrent;
+    if (m_checkoutButton) {
+        m_checkoutButton->setEnabled(canCheckout);
+        if (canCheckout) {
+            m_checkoutButton->setToolTip(
+                tr("Switch to \"%1\" (double-click in the list)").arg(selectedBranch.name));
+        } else if (selectedBranch.isCurrent) {
+            m_checkoutButton->setToolTip(tr("Already on this branch"));
+        } else {
+            m_checkoutButton->setToolTip(tr("Select a branch to switch to"));
+        }
+    }
+    if (m_checkoutAction) {
+        m_checkoutAction->setEnabled(canCheckout);
+    }
+
     if (m_mergeButton) {
         const int row = m_branchList ? m_branchList->currentRow() : -1;
         m_mergeButton->setEnabled(repoOpen && row >= 0);
@@ -1090,6 +1145,13 @@ void MainWindow::updateBranchActions()
     }
     const bool canPull =
         repoOpen && hasRemotes && !currentBranch.name.isEmpty();
+    if (m_fetchButton) {
+        m_fetchButton->setEnabled(hasRemotes);
+    }
+    if (m_fetchAction) {
+        m_fetchAction->setEnabled(hasRemotes);
+    }
+
     if (m_pullButton) {
         m_pullButton->setEnabled(canPull);
         if (currentBranch.hasUpstream()) {
@@ -1143,13 +1205,17 @@ void MainWindow::publishOrPushSelectedBranch()
 
 void MainWindow::reloadLog(const QString &branchFilter)
 {
-    m_branchFilter = branchFilter;
+    QString filter = branchFilter;
+    if (GitService::isPseudoDetachedBranchName(filter)) {
+        filter.clear();
+    }
+    m_branchFilter = filter;
 
     std::vector<Commit> commits;
-    if (branchFilter.isEmpty()) {
+    if (filter.isEmpty()) {
         commits = m_git.logAll(m_repo.path(), m_logLimit);
     } else {
-        commits = m_git.logBranch(m_repo.path(), branchFilter, m_logLimit);
+        commits = m_git.logBranch(m_repo.path(), filter, m_logLimit);
     }
 
     if (commits.empty() && !m_git.lastError().isEmpty()) {
@@ -1160,11 +1226,35 @@ void MainWindow::reloadLog(const QString &branchFilter)
     }
 
     m_historyView->setCommits(commits);
-    m_loadMoreButton->setEnabled(static_cast<int>(commits.size()) >= m_logLimit);
+    const int shown = static_cast<int>(commits.size());
+    const int total = m_git.commitCount(m_repo.path(), filter);
+    const bool hasMore = shown >= m_logLimit && (total == 0 || shown < total);
+    m_loadMoreButton->setEnabled(hasMore);
+    if (m_loadAllButton) {
+        m_loadAllButton->setEnabled(hasMore);
+    }
+    if (m_showAllCommitsButton) {
+        m_showAllCommitsButton->setVisible(!filter.isEmpty());
+    }
 
-    setStatusMessage(tr("%1 commits shown (limit %2)")
-                         .arg(commits.size())
-                         .arg(m_logLimit));
+    if (filter.isEmpty()) {
+        if (total > 0 && shown < total) {
+            setStatusMessage(tr("%1 of %2 commits shown (limit %3)")
+                                 .arg(shown)
+                                 .arg(total)
+                                 .arg(m_logLimit));
+        } else {
+            setStatusMessage(tr("%1 commits shown").arg(shown));
+        }
+    } else if (total > 0 && shown < total) {
+        setStatusMessage(tr("%1 of %2 commits on \"%3\" (limit %4)")
+                             .arg(shown)
+                             .arg(total)
+                             .arg(filter)
+                             .arg(m_logLimit));
+    } else {
+        setStatusMessage(tr("%1 commits on \"%2\"").arg(shown).arg(filter));
+    }
 
     if (!commits.empty()) {
         showCommitDetails(commits.front().hash);
@@ -1177,6 +1267,30 @@ void MainWindow::loadMoreCommits()
 {
     m_logLimit += kLogPageSize;
     reloadLog(m_branchFilter);
+}
+
+void MainWindow::loadAllCommits()
+{
+    const int total = m_git.commitCount(m_repo.path(), m_branchFilter);
+    m_logLimit = total > 0 ? total : m_logLimit + kLogPageSize * 10;
+    reloadLog(m_branchFilter);
+}
+
+void MainWindow::showAllCommits()
+{
+    m_logLimit = kInitialLogLimit;
+    if (m_branchList) {
+        m_branchList->blockSignals(true);
+        m_branchList->clearSelection();
+        m_branchList->blockSignals(false);
+    }
+    m_branchFilter.clear();
+    reloadLog();
+}
+
+void MainWindow::filterLogToBranch(int row)
+{
+    onBranchSelected(row);
 }
 
 void MainWindow::onCommitSelected(const QString &hash)
@@ -1211,15 +1325,23 @@ void MainWindow::onBranchSelected(int row)
 {
     updateBranchActions();
 
-    if (!m_repo.isValid() || row < 0) {
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    if (row < 0) {
         m_branchFilter.clear();
-        if (m_repo.isValid()) {
-            reloadLog();
-        }
+        m_logLimit = kInitialLogLimit;
+        reloadLog();
         return;
     }
 
     const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    m_logLimit = kInitialLogLimit;
     reloadLog(branch.name);
 }
 
@@ -1303,6 +1425,48 @@ void MainWindow::deleteBranch(const Branch &branch)
     QMessageBox::information(this, tr("Delete branch"),
                              tr("Branch \"%1\" was deleted.").arg(branch.name));
     refreshRepository();
+}
+
+QString MainWindow::pickRemoteForFetch(const QString &title)
+{
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, title,
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
+        return {};
+    }
+
+    if (remoteList.size() == 1) {
+        return remoteList.first();
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(title);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Fetch from:"), &dialog));
+
+    auto *remoteCombo = new QComboBox(&dialog);
+    remoteCombo->addItem(tr("All remotes"), QStringLiteral("*"));
+    for (const QString &name : remoteList) {
+        remoteCombo->addItem(name, name);
+    }
+    const int defaultIndex = remoteList.indexOf(m_git.defaultRemote(m_repo.path()));
+    remoteCombo->setCurrentIndex(defaultIndex >= 0 ? defaultIndex + 1 : 0);
+    layout->addWidget(remoteCombo);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return {};
+    }
+
+    return remoteCombo->currentData().toString();
 }
 
 QString MainWindow::pickRemoteForBranch(const Branch &branch, const QString &title)
@@ -1507,6 +1671,59 @@ void MainWindow::pushBranch(const Branch &branch)
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
+void MainWindow::fetchRemotes()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Fetch"), tr("Open a repository first."));
+        return;
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Fetch"),
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
+        return;
+    }
+
+    const QString selection = pickRemoteForFetch(tr("Fetch"));
+    if (selection.isEmpty()) {
+        return;
+    }
+
+    const bool fetchAll = (selection == QLatin1String("*"));
+    const auto answer = QMessageBox::question(
+        this, tr("Fetch"),
+        fetchAll ? tr("Fetch updates from all remotes?\n\n"
+                      "Deleted remote branches will be removed from the list.\n"
+                      "This runs: git fetch --all --prune")
+                 : tr("Fetch updates from \"%1\"?\n\n"
+                      "Deleted remote branches will be removed from the list.\n"
+                      "This runs: git fetch --prune %1")
+                      .arg(selection),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const GitProcessResult result =
+        fetchAll ? m_git.fetchAll(m_repo.path()) : m_git.fetchRemote(m_repo.path(), selection);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Fetch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    QMessageBox::information(
+        this, tr("Fetch"),
+        output.isEmpty()
+            ? (fetchAll ? tr("All remotes are up to date.") : tr("Remote \"%1\" is up to date.").arg(selection))
+            : output);
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
 void MainWindow::pullCurrentBranch()
 {
     const Branch branch = currentLocalBranch();
@@ -1586,7 +1803,8 @@ void MainWindow::pullBranch(const Branch &branch)
         const auto answer = QMessageBox::question(
             this, tr("Pull"),
             tr("Pull from %1/%2 into \"%3\"?\n\n"
-               "This runs: git pull %1 %2")
+               "Deleted remote branches will be removed from the list.\n"
+               "This runs: git pull --prune %1 %2")
                 .arg(remote, remoteBranch, branch.name),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) {
@@ -1612,6 +1830,22 @@ void MainWindow::pullBranch(const Branch &branch)
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
+void MainWindow::checkoutSelectedBranch()
+{
+    const int row = m_branchList ? m_branchList->currentRow() : -1;
+    if (row < 0) {
+        QMessageBox::information(this, tr("Checkout"), tr("Select a branch first."));
+        return;
+    }
+
+    const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    checkoutBranch(branch);
+}
+
 void MainWindow::checkoutBranch(const Branch &branch)
 {
     if (!m_repo.isValid() || branch.name.isEmpty()) {
@@ -1622,10 +1856,25 @@ void MainWindow::checkoutBranch(const Branch &branch)
         return;
     }
 
+    QString targetLabel = branch.name;
+    if (branch.isRemote) {
+        const int slash = branch.name.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            const QString localName = branch.name.mid(slash + 1);
+            if (m_git.branchExists(m_repo.path(), localName)) {
+                targetLabel = localName;
+            } else {
+                targetLabel =
+                    tr("%1 (new local branch tracking %2)").arg(localName, branch.name);
+            }
+        }
+    }
+
     if (m_git.hasUncommittedChanges(m_repo.path())) {
         const auto answer = QMessageBox::warning(
             this, tr("Checkout branch"),
-            tr("The working tree has uncommitted changes. Switch to \"%1\" anyway?").arg(branch.name),
+            tr("The working tree has uncommitted changes. Switch to \"%1\" anyway?")
+                .arg(targetLabel),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) {
             return;
@@ -1640,6 +1889,15 @@ void MainWindow::checkoutBranch(const Branch &branch)
         return;
     }
 
+    QString logFilter = branch.name;
+    if (branch.isRemote) {
+        const int slash = branch.name.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            logFilter = branch.name.mid(slash + 1);
+        }
+    }
+    m_branchFilter = logFilter;
+    m_logLimit = kInitialLogLimit;
     refreshRepository();
 }
 
@@ -1668,17 +1926,33 @@ void MainWindow::showBranchContextMenu(const QPoint &pos)
     QMenu menu(this);
 
     if (!branch.isCurrent) {
-        menu.addAction(tr("Checkout \"%1\"…").arg(branch.name), this,
+        QString checkoutLabel = branch.name;
+        if (branch.isRemote) {
+            const int slash = branch.name.indexOf(QLatin1Char('/'));
+            if (slash > 0) {
+                const QString localName = branch.name.mid(slash + 1);
+                if (!m_git.branchExists(m_repo.path(), localName)) {
+                    checkoutLabel =
+                        tr("%1 (create local %2)").arg(branch.name, localName);
+                } else {
+                    checkoutLabel = localName;
+                }
+            }
+        }
+        menu.addAction(tr("Checkout \"%1\"…").arg(checkoutLabel), this,
                        [this, branch]() { checkoutBranch(branch); });
     }
 
     const QString current = m_git.currentBranch(m_repo.path());
     if (!branch.isCurrent && branch.name != current) {
-        menu.addAction(tr("Merge into current (%1)…").arg(current), this,
+        const QString mergeTarget = m_git.displayBranchName(m_repo.path());
+        menu.addAction(tr("Merge into current (%1)…").arg(mergeTarget), this,
                        &MainWindow::mergeSelectedBranch);
     }
 
-    menu.addAction(tr("Show commits"), this, [this, row]() { onBranchSelected(row); });
+    if (!m_branchFilter.isEmpty()) {
+        menu.addAction(tr("Show all commits"), this, &MainWindow::showAllCommits);
+    }
 
     if (!branch.isRemote) {
         if (branch.hasUpstream()) {

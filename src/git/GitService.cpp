@@ -70,6 +70,11 @@ bool pathIsGitlink(const GitProcessRunner &runner,
 
 constexpr const char kEmptyTreeHash[] = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+bool isDetachedHeadLabel(const QString &name)
+{
+    return name.startsWith(QStringLiteral("(HEAD detached"));
+}
+
 } // namespace
 
 GitService::GitService(GitProcessRunner runner)
@@ -130,6 +135,9 @@ std::vector<Commit> GitService::logBranch(const QString &repoPath,
                                           const QString &branch,
                                           int maxCount) const
 {
+    if (isDetachedHeadLabel(branch)) {
+        return runLog(repoPath, {QStringLiteral("HEAD")}, maxCount);
+    }
     return runLog(repoPath, {branch}, maxCount);
 }
 
@@ -141,7 +149,7 @@ std::vector<Commit> GitService::runLog(const QString &repoPath,
 
     QStringList args;
     args << QStringLiteral("log") << extraArgs
-         << QStringLiteral("--date-order")
+         << QStringLiteral("--topo-order")
          << QStringLiteral("-n")
          << QString::number(maxCount)
          << QStringLiteral("--format=%H%x09%P%x09%an%x09%ad%x09%s")
@@ -156,16 +164,46 @@ std::vector<Commit> GitService::runLog(const QString &repoPath,
     return LogParser::parseLogOutput(result.stdoutText);
 }
 
+int GitService::commitCount(const QString &repoPath, const QString &branch) const
+{
+    QStringList args{QStringLiteral("rev-list"), QStringLiteral("--count")};
+    const QString trimmed = branch.trimmed();
+    if (trimmed.isEmpty() || isDetachedHeadLabel(trimmed)) {
+        args << QStringLiteral("--all");
+    } else {
+        args << trimmed;
+    }
+
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        return 0;
+    }
+
+    bool ok = false;
+    const int count = result.stdoutText.trimmed().toInt(&ok);
+    return ok ? count : 0;
+}
+
 std::vector<Branch> GitService::branches(const QString &repoPath) const
 {
     m_lastError.clear();
     std::vector<Branch> list;
 
     const QString current = currentBranch(repoPath);
+    const bool detached = (current == QLatin1String("HEAD"));
+    QString headHash;
+    if (detached) {
+        const GitProcessResult headResult =
+            m_runner.run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+        if (headResult.success()) {
+            headHash = headResult.stdoutText.trimmed();
+        }
+    }
 
     QStringList args;
-    args << QStringLiteral("branch")
-         << QStringLiteral("-a")
+    args << QStringLiteral("for-each-ref")
+         << QStringLiteral("refs/heads")
+         << QStringLiteral("refs/remotes")
          << QStringLiteral("--format=%(refname:short)|%(objectname)");
 
     const GitProcessResult result = m_runner.run(repoPath, args);
@@ -206,6 +244,12 @@ std::vector<Branch> GitService::branches(const QString &repoPath) const
 
         Branch branch;
         branch.name = line.left(sep).trimmed();
+        if (isDetachedHeadLabel(branch.name)) {
+            continue;
+        }
+        if (remoteNames.contains(branch.name) || branch.name.endsWith(QStringLiteral("/HEAD"))) {
+            continue;
+        }
         branch.tipHash = line.mid(sep + 1).trimmed();
         for (const QString &remote : remoteNames) {
             if (!remote.isEmpty() && branch.name.startsWith(remote + QLatin1Char('/'))) {
@@ -216,7 +260,11 @@ std::vector<Branch> GitService::branches(const QString &repoPath) const
         if (!branch.isRemote) {
             branch.upstream = upstreamByBranch.value(branch.name);
         }
-        branch.isCurrent = (branch.name == current);
+        branch.isCurrent =
+            !detached && (branch.name == current);
+        if (detached && !headHash.isEmpty() && branch.tipHash == headHash && !branch.isRemote) {
+            branch.isCurrent = true;
+        }
         list.push_back(std::move(branch));
     }
 
@@ -228,7 +276,10 @@ QString GitService::currentBranch(const QString &repoPath) const
     const GitProcessResult result =
         m_runner.run(repoPath, {QStringLiteral("branch"), QStringLiteral("--show-current")});
     if (result.success()) {
-        return result.stdoutText.trimmed();
+        const QString branch = result.stdoutText.trimmed();
+        if (!branch.isEmpty()) {
+            return branch;
+        }
     }
 
     const GitProcessResult head =
@@ -238,6 +289,34 @@ QString GitService::currentBranch(const QString &repoPath) const
         return head.stdoutText.trimmed();
     }
     return {};
+}
+
+bool GitService::isPseudoDetachedBranchName(const QString &name)
+{
+    return isDetachedHeadLabel(name);
+}
+
+QString GitService::displayBranchName(const QString &repoPath) const
+{
+    const QString branch = currentBranch(repoPath);
+    if (branch != QLatin1String("HEAD")) {
+        return branch;
+    }
+
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("name-rev"), QStringLiteral("--name-only"),
+                                  QStringLiteral("HEAD")});
+    if (!result.success()) {
+        return QStringLiteral("HEAD (detached)");
+    }
+
+    QString name = result.stdoutText.trimmed();
+    if (name.startsWith(QStringLiteral("remotes/"))) {
+        name = name.mid(QStringLiteral("remotes/").size());
+    } else if (name.startsWith(QStringLiteral("tags/"))) {
+        name = name.mid(QStringLiteral("tags/").size());
+    }
+    return QStringLiteral("%1 (detached)").arg(name);
 }
 
 BranchSyncCounts GitService::currentBranchSyncCounts(const QString &repoPath) const
@@ -574,8 +653,40 @@ GitProcessResult GitService::checkoutBranch(const QString &repoPath, const QStri
 {
     m_lastError.clear();
 
+    const QString trimmed = name.trimmed();
+    if (isDetachedHeadLabel(trimmed)) {
+        m_lastError = QStringLiteral("Not a branch: %1").arg(trimmed);
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const int slash = trimmed.indexOf(QLatin1Char('/'));
+    if (slash > 0) {
+        const QString remote = trimmed.left(slash);
+        if (remotes(repoPath).contains(remote)) {
+            const QString localName = trimmed.mid(slash + 1);
+            if (branchExists(repoPath, localName)) {
+                const GitProcessResult result =
+                    m_runner.run(repoPath, {QStringLiteral("checkout"), localName});
+                if (!result.success()) {
+                    setError(QStringLiteral("git checkout failed"), result);
+                }
+                return result;
+            }
+
+            const GitProcessResult result =
+                m_runner.run(repoPath, {QStringLiteral("checkout"), QStringLiteral("-b"), localName,
+                                        QStringLiteral("--track"), trimmed});
+            if (!result.success()) {
+                setError(QStringLiteral("git checkout failed"), result);
+            }
+            return result;
+        }
+    }
+
     const GitProcessResult result =
-        m_runner.run(repoPath, {QStringLiteral("checkout"), name.trimmed()});
+        m_runner.run(repoPath, {QStringLiteral("checkout"), trimmed});
     if (!result.success()) {
         setError(QStringLiteral("git checkout failed"), result);
     }
@@ -883,7 +994,7 @@ GitProcessResult GitService::pullBranch(const QString &repoPath,
         return result;
     }
 
-    QStringList args{QStringLiteral("pull"), trimmedRemote};
+    QStringList args{QStringLiteral("pull"), QStringLiteral("--prune"), trimmedRemote};
     if (!trimmedBranch.isEmpty()) {
         args << trimmedBranch;
     }
@@ -891,6 +1002,38 @@ GitProcessResult GitService::pullBranch(const QString &repoPath,
     const GitProcessResult result = m_runner.run(repoPath, args);
     if (!result.success()) {
         setError(QStringLiteral("git pull failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::fetchAll(const QString &repoPath) const
+{
+    m_lastError.clear();
+
+    const GitProcessResult result = m_runner.run(
+        repoPath, {QStringLiteral("fetch"), QStringLiteral("--all"), QStringLiteral("--prune")});
+    if (!result.success()) {
+        setError(QStringLiteral("git fetch failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::fetchRemote(const QString &repoPath, const QString &remote) const
+{
+    m_lastError.clear();
+
+    const QString trimmedRemote = remote.trimmed();
+    if (trimmedRemote.isEmpty()) {
+        m_lastError = QStringLiteral("Remote name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result = m_runner.run(
+        repoPath, {QStringLiteral("fetch"), QStringLiteral("--prune"), trimmedRemote});
+    if (!result.success()) {
+        setError(QStringLiteral("git fetch failed"), result);
     }
     return result;
 }
