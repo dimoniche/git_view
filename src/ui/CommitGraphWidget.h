@@ -24,10 +24,12 @@ public:
 
 signals:
     void rowClicked(int row);
+    void rowDoubleClicked(int row);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
 
 private:
     int laneCenterX(int lane) const;

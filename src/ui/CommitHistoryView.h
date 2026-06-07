@@ -35,6 +35,7 @@ protected:
 
 private:
     void selectRow(int row, bool scrollIntoView = true);
+    void openCommitDetails(int row);
     void showCommitContextMenu(int row, const QPoint &globalPos);
     void updateGraphGeometry();
     void syncGraphScrollFromTable();

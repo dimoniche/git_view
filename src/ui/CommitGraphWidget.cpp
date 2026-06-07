@@ -223,3 +223,17 @@ void CommitGraphWidget::mousePressEvent(QMouseEvent *event)
 
     emit rowClicked(row);
 }
+
+void CommitGraphWidget::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton) {
+        return;
+    }
+
+    const int row = rowAtY(static_cast<int>(event->position().y()));
+    if (row < 0) {
+        return;
+    }
+
+    emit rowDoubleClicked(row);
+}

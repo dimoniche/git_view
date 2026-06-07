@@ -80,6 +80,8 @@ CommitHistoryView::CommitHistoryView(QWidget *parent)
 
     connect(m_graph, &CommitGraphWidget::rowClicked, this,
             [this](int row) { selectRow(row, true); });
+    connect(m_graph, &CommitGraphWidget::rowDoubleClicked, this,
+            [this](int row) { openCommitDetails(row); });
     connect(m_table->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
             [this](const QModelIndex &current, const QModelIndex &previous) {
                 Q_UNUSED(previous);
@@ -88,6 +90,8 @@ CommitHistoryView::CommitHistoryView(QWidget *parent)
                 }
                 selectRow(current.row(), false);
             });
+    connect(m_table, &QTableView::doubleClicked, this,
+            [this](const QModelIndex &index) { openCommitDetails(index.row()); });
     connect(m_table, &QTableView::customContextMenuRequested, this,
             [this](const QPoint &pos) {
                 const QModelIndex index = m_table->indexAt(pos);
@@ -240,6 +244,16 @@ void CommitHistoryView::selectRow(int row, bool scrollIntoView)
     m_syncingSelection = false;
 }
 
+void CommitHistoryView::openCommitDetails(int row)
+{
+    if (row < 0 || row >= static_cast<int>(m_commits.size())) {
+        return;
+    }
+
+    selectRow(row, true);
+    emit viewCommitDetailsRequested(m_commits[static_cast<size_t>(row)].hash);
+}
+
 void CommitHistoryView::showCommitContextMenu(int row, const QPoint &globalPos)
 {
     if (row < 0 || row >= static_cast<int>(m_commits.size())) {
@@ -251,9 +265,7 @@ void CommitHistoryView::showCommitContextMenu(int row, const QPoint &globalPos)
 
     QMenu menu(this);
 
-    menu.addAction(tr("Show commit details"), this, [this, commit]() {
-        emit viewCommitDetailsRequested(commit.hash);
-    });
+    menu.addAction(tr("Show commit details"), this, [this, row]() { openCommitDetails(row); });
 
     menu.addSeparator();
 
