@@ -33,6 +33,7 @@ signals:
 
 private slots:
     void onFileSelectionChanged();
+    void onFileDoubleClicked(QTreeWidgetItem *item, int column);
     void onDiscardFileClicked();
     void onDiscardAllClicked();
     void updateDiscardFileButton();
@@ -40,6 +41,7 @@ private slots:
 
 private:
     void loadDiffForCurrentFile();
+    void openDiffInSeparateWindow();
     void showDiffText(const QString &text, const QString &title);
     void rebuildChangeTree();
     void selectTreeItem(const QString &path, WorkingDiffScope scope);

@@ -8,6 +8,7 @@
 
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
 class QPlainTextEdit;
 class GitService;
 
@@ -23,10 +24,12 @@ public:
 
 private slots:
     void onFileSelectionChanged();
+    void onFileDoubleClicked(QListWidgetItem *item);
     void showFilesContextMenu(const QPoint &pos);
 
 private:
     void loadDiffForCurrentFile();
+    void openDiffInSeparateWindow();
     void showDiffText(const QString &text, const QString &title);
 
     QString m_repoPath;

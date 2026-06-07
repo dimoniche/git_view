@@ -2,6 +2,7 @@
 
 #include "git/GitService.h"
 #include "ui/DiffHighlighter.h"
+#include "ui/DiffViewerDialog.h"
 
 #include <QFont>
 #include <QGuiApplication>
@@ -36,6 +37,8 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_filesList, &QListWidget::currentRowChanged, this,
             &CommitDetailsPanel::onFileSelectionChanged);
+    connect(m_filesList, &QListWidget::itemDoubleClicked, this,
+            &CommitDetailsPanel::onFileDoubleClicked);
     connect(m_filesList, &QWidget::customContextMenuRequested, this,
             &CommitDetailsPanel::showFilesContextMenu);
     filesLayout->addWidget(m_filesList);
@@ -128,6 +131,19 @@ void CommitDetailsPanel::onFileSelectionChanged()
     loadDiffForCurrentFile();
 }
 
+void CommitDetailsPanel::onFileDoubleClicked(QListWidgetItem *item)
+{
+    if (!item) {
+        return;
+    }
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+    m_filesList->setCurrentRow(m_filesList->row(item));
+    openDiffInSeparateWindow();
+}
+
 void CommitDetailsPanel::showFilesContextMenu(const QPoint &pos)
 {
     QListWidgetItem *item = m_filesList->itemAt(pos);
@@ -184,6 +200,36 @@ void CommitDetailsPanel::loadDiffForCurrentFile()
     }
 
     showDiffText(diff, m_diffTitle->text());
+}
+
+void CommitDetailsPanel::openDiffInSeparateWindow()
+{
+    if (!m_git || m_repoPath.isEmpty() || m_commitHash.isEmpty()) {
+        return;
+    }
+
+    const QListWidgetItem *item = m_filesList->currentItem();
+    if (!item) {
+        return;
+    }
+
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const QString title = tr("Diff: %1").arg(path);
+    const QString diff = m_git->commitFileDiff(m_repoPath, m_commitHash, path);
+    if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
+        DiffViewerDialog::showDiff(this, title, m_git->lastError());
+        return;
+    }
+    if (diff.isEmpty()) {
+        DiffViewerDialog::showDiff(this, title, tr("No diff output for this file."));
+        return;
+    }
+
+    DiffViewerDialog::showDiff(this, title, diff);
 }
 
 void CommitDetailsPanel::showDiffText(const QString &text, const QString &title)

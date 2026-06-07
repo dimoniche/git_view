@@ -21,6 +21,7 @@ set(GIT_VIEW_SOURCES
     ui/PtySession.cpp
     ui/VtermTerminalWidget.cpp
     ui/DiffHighlighter.cpp
+    ui/DiffViewerDialog.cpp
 )
 
 add_executable(git_view ${GIT_VIEW_SOURCES})

@@ -3,6 +3,7 @@
 #include "core/WorkingTreeChange.h"
 #include "git/GitService.h"
 #include "ui/DiffHighlighter.h"
+#include "ui/DiffViewerDialog.h"
 
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -116,6 +117,8 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
     m_filesTree->setUniformRowHeights(true);
     connect(m_filesTree, &QTreeWidget::currentItemChanged, this,
             &WorkingChangesPanel::onFileSelectionChanged);
+    connect(m_filesTree, &QTreeWidget::itemDoubleClicked, this,
+            &WorkingChangesPanel::onFileDoubleClicked);
     connect(m_filesTree, &QWidget::customContextMenuRequested, this,
             &WorkingChangesPanel::showFilesContextMenu);
 
@@ -497,6 +500,16 @@ void WorkingChangesPanel::onFileSelectionChanged()
     emit fileSelectionChanged();
 }
 
+void WorkingChangesPanel::onFileDoubleClicked(QTreeWidgetItem *item, int column)
+{
+    Q_UNUSED(column);
+    if (!item || item->data(0, KindRole).toInt() != static_cast<int>(TreeItemKind::File)) {
+        return;
+    }
+    m_filesTree->setCurrentItem(item);
+    openDiffInSeparateWindow();
+}
+
 void WorkingChangesPanel::loadDiffForCurrentFile()
 {
     if (!m_git || m_repoPath.isEmpty()) {
@@ -580,6 +593,95 @@ void WorkingChangesPanel::loadDiffForCurrentFile()
     }
 
     showDiffText(diff, m_diffTitle->text());
+}
+
+void WorkingChangesPanel::openDiffInSeparateWindow()
+{
+    if (!m_git || m_repoPath.isEmpty()) {
+        return;
+    }
+
+    const QTreeWidgetItem *item = selectedFileItem();
+    if (!item) {
+        return;
+    }
+
+    const QString path = item->data(0, PathRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const WorkingTreeChange change = changeForPath(path);
+    const WorkingDiffScope scope = selectedItemScope();
+
+    QString sectionLabel;
+    switch (scope) {
+    case WorkingDiffScope::Staged:
+        sectionLabel = tr("Staged Changes");
+        break;
+    case WorkingDiffScope::AgainstHead:
+        sectionLabel = tr("All vs HEAD");
+        break;
+    case WorkingDiffScope::Unstaged:
+        sectionLabel = tr("Changes");
+        break;
+    }
+
+    const QString title = tr("%1 — %2").arg(sectionLabel, path);
+    const QString diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
+
+    if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
+        DiffViewerDialog::showDiff(this, title, m_git->lastError());
+        return;
+    }
+
+    if (diff.isEmpty()) {
+        const bool cachedStaged = m_git->hasCachedDiffForPath(m_repoPath, path);
+        QString scopeLabel;
+        switch (scope) {
+        case WorkingDiffScope::Staged:
+            scopeLabel = tr("staged");
+            break;
+        case WorkingDiffScope::AgainstHead:
+            scopeLabel = tr("vs HEAD");
+            break;
+        case WorkingDiffScope::Unstaged:
+            scopeLabel = tr("changes");
+            break;
+        }
+
+        QString hint = tr("No diff for \"%1\".").arg(scopeLabel);
+        if (scope == WorkingDiffScope::Staged && !cachedStaged) {
+            if (!change.hasStaged() && change.hasUnstaged()) {
+                hint = tr("This file has only unstaged changes. See the Changes section.");
+            } else if (change.hasStaged() && !change.hasUnstaged()) {
+                hint = tr("Git status shows staged, but there is no staged diff vs HEAD. "
+                          "Try: git add \"%1\"")
+                           .arg(path);
+            } else {
+                hint = tr("There is no staged diff for this file in the index.");
+            }
+        } else if (scope == WorkingDiffScope::Staged && cachedStaged) {
+            hint = tr("Staged diff exists but could not be loaded.");
+            if (!m_git->lastDiffCommand().isEmpty()) {
+                hint += QLatin1Char('\n') + tr("Try in terminal: %1").arg(m_git->lastDiffCommand());
+            }
+        }
+        hint += QLatin1Char('\n')
+                + tr("Porcelain %1 (%2) — %3")
+                      .arg(change.porcelainStatusDisplay(), change.statusDescription(), path);
+        const QString cmd = m_git->lastDiffCommand();
+        if (!cmd.isEmpty()) {
+            hint += QLatin1Char('\n') + tr("Last command: %1").arg(cmd);
+        }
+        if (!m_git->lastError().isEmpty()) {
+            hint += QLatin1Char('\n') + m_git->lastError();
+        }
+        DiffViewerDialog::showDiff(this, title, hint);
+        return;
+    }
+
+    DiffViewerDialog::showDiff(this, title, diff);
 }
 
 void WorkingChangesPanel::showDiffText(const QString &text, const QString &title)
