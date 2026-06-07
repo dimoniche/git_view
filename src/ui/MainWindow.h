@@ -93,6 +93,10 @@ private:
     void setStatusMessage(const QString &message);
     Branch branchAtRow(int row) const;
     Branch branchForActions() const;
+    int rowForBranch(const QString &name) const;
+    int currentBranchRow() const;
+    void selectBranchRow(int row, bool updateLog);
+    void selectCurrentBranch();
     QString pickRemoteForBranch(const Branch &branch, const QString &title);
     QString pickRemoteForFetch(const QString &title);
 

@@ -673,9 +673,8 @@ void MainWindow::setRepository(const QString &path)
     m_branchFilter.clear();
     saveRecentRepo(topLevel);
 
-    m_branchList->clearSelection();
     reloadBranches();
-    reloadLog();
+    selectCurrentBranch();
     refreshWorkingTree();
 
     if (m_git.hasUncommittedChanges(topLevel)) {
@@ -1046,6 +1045,80 @@ void MainWindow::reloadBranches()
         item->setData(Qt::UserRole, branch.name);
     }
 
+    if (m_branchList && !m_branchFilter.isEmpty()) {
+        const int row = rowForBranch(m_branchFilter);
+        if (row >= 0) {
+            m_branchList->blockSignals(true);
+            m_branchList->setCurrentRow(row);
+            m_branchList->blockSignals(false);
+        }
+    }
+
+    updateBranchActions();
+}
+
+int MainWindow::rowForBranch(const QString &name) const
+{
+    if (name.isEmpty()) {
+        return -1;
+    }
+
+    for (int row = 0; row < static_cast<int>(m_branches.size()); ++row) {
+        if (m_branches[static_cast<size_t>(row)].name == name) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+int MainWindow::currentBranchRow() const
+{
+    for (int row = 0; row < static_cast<int>(m_branches.size()); ++row) {
+        const Branch &branch = m_branches[static_cast<size_t>(row)];
+        if (branch.isCurrent && !branch.isRemote) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+void MainWindow::selectBranchRow(int row, bool updateLog)
+{
+    if (!m_branchList || row < 0) {
+        return;
+    }
+
+    m_branchList->blockSignals(true);
+    m_branchList->setCurrentRow(row);
+    m_branchList->blockSignals(false);
+    updateBranchActions();
+
+    if (!updateLog || !m_repo.isValid()) {
+        return;
+    }
+
+    const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    m_logLimit = kInitialLogLimit;
+    reloadLog(branch.name);
+}
+
+void MainWindow::selectCurrentBranch()
+{
+    const int row = currentBranchRow();
+    if (row >= 0) {
+        selectBranchRow(row, true);
+        return;
+    }
+
+    if (m_branchList) {
+        m_branchList->clearSelection();
+    }
+    m_logLimit = kInitialLogLimit;
+    reloadLog();
     updateBranchActions();
 }
 
