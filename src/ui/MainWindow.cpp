@@ -1558,14 +1558,72 @@ void MainWindow::deleteBranch(const Branch &branch)
     refreshRepository();
 }
 
+QString MainWindow::promptAddRemote(const QString &title)
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(title);
+    dialog.resize(520, 200);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("No git remotes configured yet."), &dialog));
+    layout->addWidget(new QLabel(tr("Remote name:"), &dialog));
+
+    auto *nameEdit = new QLineEdit(QStringLiteral("origin"), &dialog);
+    layout->addWidget(nameEdit);
+
+    layout->addWidget(new QLabel(tr("Repository URL:"), &dialog));
+    auto *urlEdit = new QLineEdit(&dialog);
+    urlEdit->setPlaceholderText(tr("https://github.com/user/repo.git"));
+    urlEdit->setClearButtonEnabled(true);
+    layout->addWidget(urlEdit);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    urlEdit->setFocus();
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return {};
+    }
+
+    const QString name = nameEdit->text().trimmed();
+    const QString url = urlEdit->text().trimmed();
+
+    const QString nameError = m_git.validateRemoteName(name);
+    if (!nameError.isEmpty()) {
+        QMessageBox::warning(this, title, nameError);
+        return {};
+    }
+
+    if (url.isEmpty()) {
+        QMessageBox::warning(this, title, tr("Repository URL is empty"));
+        return {};
+    }
+
+    const GitProcessResult result = m_git.addRemote(m_repo.path(), name, url);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, title,
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return {};
+    }
+
+    refreshRepository();
+    return name;
+}
+
 QString MainWindow::pickRemoteForFetch(const QString &title)
 {
-    const QStringList remoteList = m_git.remotes(m_repo.path());
+    QStringList remoteList = m_git.remotes(m_repo.path());
     if (remoteList.isEmpty()) {
-        QMessageBox::warning(
-            this, title,
-            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
-        return {};
+        const QString added = promptAddRemote(title);
+        if (added.isEmpty()) {
+            return {};
+        }
+        remoteList = m_git.remotes(m_repo.path());
     }
 
     if (remoteList.size() == 1) {
@@ -1602,12 +1660,13 @@ QString MainWindow::pickRemoteForFetch(const QString &title)
 
 QString MainWindow::pickRemoteForBranch(const Branch &branch, const QString &title)
 {
-    const QStringList remoteList = m_git.remotes(m_repo.path());
+    QStringList remoteList = m_git.remotes(m_repo.path());
     if (remoteList.isEmpty()) {
-        QMessageBox::warning(
-            this, title,
-            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
-        return {};
+        const QString added = promptAddRemote(title);
+        if (added.isEmpty()) {
+            return {};
+        }
+        return added;
     }
 
     QString remote = m_git.defaultRemote(m_repo.path());

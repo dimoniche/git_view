@@ -100,6 +100,7 @@ private:
     void restoreBranchListSelection();
     QString pickRemoteForBranch(const Branch &branch, const QString &title);
     QString pickRemoteForFetch(const QString &title);
+    QString promptAddRemote(const QString &title);
 
     GitService m_git;
     Repo m_repo;

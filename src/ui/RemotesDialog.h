@@ -5,6 +5,7 @@
 #include <QDialog>
 
 class QCheckBox;
+class QLabel;
 class QLineEdit;
 class QListWidget;
 
@@ -17,7 +18,7 @@ public:
     bool wasModified() const { return m_modified; }
 
 private slots:
-    void onRemoteSelectionChanged();
+    void onRemoteSelectionChanged(int row);
     void onSeparatePushToggled(bool checked);
     void onAddRemote();
     void onSaveRemote();
@@ -25,17 +26,20 @@ private slots:
 
 private:
     void reloadRemotes();
-    void clearForm();
-    void fillForm(const GitRemote &remote);
+    void enterAddMode();
+    void enterEditMode(const GitRemote &remote);
+    void updateFormHint();
     GitRemote remoteFromForm() const;
     bool validateForm(QString *errorOut) const;
 
     QString m_repoPath;
     GitService *m_git = nullptr;
     bool m_modified = false;
-    bool m_addMode = false;
+    bool m_addMode = true;
+    bool m_syncingList = false;
 
     QListWidget *m_remoteList = nullptr;
+    QLabel *m_hintLabel = nullptr;
     QLineEdit *m_nameEdit = nullptr;
     QLineEdit *m_fetchUrlEdit = nullptr;
     QCheckBox *m_separatePushCheck = nullptr;

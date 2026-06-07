@@ -3,6 +3,7 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -16,7 +17,7 @@ RemotesDialog::RemotesDialog(const QString &repoPath, GitService *git, QWidget *
     , m_git(git)
 {
     setWindowTitle(tr("Remotes"));
-    resize(560, 360);
+    resize(560, 400);
 
     auto *layout = new QVBoxLayout(this);
 
@@ -28,13 +29,19 @@ RemotesDialog::RemotesDialog(const QString &repoPath, GitService *git, QWidget *
             &RemotesDialog::onRemoteSelectionChanged);
     layout->addWidget(m_remoteList);
 
+    m_hintLabel = new QLabel(this);
+    m_hintLabel->setWordWrap(true);
+    layout->addWidget(m_hintLabel);
+
     layout->addWidget(new QLabel(tr("Name:"), this));
     m_nameEdit = new QLineEdit(this);
+    m_nameEdit->setPlaceholderText(tr("origin"));
     layout->addWidget(m_nameEdit);
 
-    layout->addWidget(new QLabel(tr("Fetch URL:"), this));
+    layout->addWidget(new QLabel(tr("Repository URL:"), this));
     m_fetchUrlEdit = new QLineEdit(this);
     m_fetchUrlEdit->setPlaceholderText(tr("https://github.com/user/repo.git"));
+    m_fetchUrlEdit->setClearButtonEnabled(true);
     layout->addWidget(m_fetchUrlEdit);
 
     m_separatePushCheck = new QCheckBox(tr("Separate push URL"), this);
@@ -44,6 +51,7 @@ RemotesDialog::RemotesDialog(const QString &repoPath, GitService *git, QWidget *
     layout->addWidget(new QLabel(tr("Push URL:"), this));
     m_pushUrlEdit = new QLineEdit(this);
     m_pushUrlEdit->setEnabled(false);
+    m_pushUrlEdit->setClearButtonEnabled(true);
     layout->addWidget(m_pushUrlEdit);
 
     auto *buttonRow = new QHBoxLayout();
@@ -67,44 +75,81 @@ RemotesDialog::RemotesDialog(const QString &repoPath, GitService *git, QWidget *
     layout->addWidget(buttons);
 
     reloadRemotes();
-    clearForm();
+    enterAddMode();
+    m_nameEdit->setFocus();
 }
 
 void RemotesDialog::reloadRemotes()
 {
+    m_syncingList = true;
+
+    QItemSelectionModel *selection = m_remoteList->selectionModel();
+    if (selection) {
+        selection->blockSignals(true);
+    }
+    m_remoteList->blockSignals(true);
+
     m_remoteList->clear();
-    if (!m_git) {
-        return;
+    if (m_git) {
+        for (const GitRemote &remote : m_git->listRemotes(m_repoPath)) {
+            QString label = remote.name;
+            if (!remote.fetchUrl.isEmpty()) {
+                label += QStringLiteral(" — ") + remote.fetchUrl;
+            }
+            auto *item = new QListWidgetItem(label, m_remoteList);
+            item->setData(Qt::UserRole, remote.name);
+        }
     }
 
-    for (const GitRemote &remote : m_git->listRemotes(m_repoPath)) {
-        QString label = remote.name;
-        if (!remote.fetchUrl.isEmpty()) {
-            label += QStringLiteral(" — ") + remote.fetchUrl;
-        }
-        auto *item = new QListWidgetItem(label, m_remoteList);
-        item->setData(Qt::UserRole, remote.name);
+    m_remoteList->blockSignals(false);
+    if (selection) {
+        selection->blockSignals(false);
     }
+
+    m_syncingList = false;
 }
 
-void RemotesDialog::clearForm()
+void RemotesDialog::enterAddMode()
 {
     m_addMode = true;
     m_nameEdit->clear();
     m_nameEdit->setReadOnly(false);
+    m_nameEdit->setEnabled(true);
     m_fetchUrlEdit->clear();
+    m_fetchUrlEdit->setReadOnly(false);
+    m_fetchUrlEdit->setEnabled(true);
     m_separatePushCheck->setChecked(false);
     m_pushUrlEdit->clear();
     m_pushUrlEdit->setEnabled(false);
+    updateFormHint();
+
+    if (m_syncingList || !m_remoteList || m_remoteList->currentRow() < 0) {
+        return;
+    }
+
+    m_syncingList = true;
+    QItemSelectionModel *selection = m_remoteList->selectionModel();
+    if (selection) {
+        selection->blockSignals(true);
+    }
+    m_remoteList->blockSignals(true);
     m_remoteList->clearSelection();
+    m_remoteList->blockSignals(false);
+    if (selection) {
+        selection->blockSignals(false);
+    }
+    m_syncingList = false;
 }
 
-void RemotesDialog::fillForm(const GitRemote &remote)
+void RemotesDialog::enterEditMode(const GitRemote &remote)
 {
     m_addMode = false;
     m_nameEdit->setText(remote.name);
     m_nameEdit->setReadOnly(true);
+    m_nameEdit->setEnabled(true);
     m_fetchUrlEdit->setText(remote.fetchUrl);
+    m_fetchUrlEdit->setReadOnly(false);
+    m_fetchUrlEdit->setEnabled(true);
     if (remote.hasSeparatePushUrl()) {
         m_separatePushCheck->setChecked(true);
         m_pushUrlEdit->setText(remote.pushUrl);
@@ -114,22 +159,53 @@ void RemotesDialog::fillForm(const GitRemote &remote)
         m_pushUrlEdit->clear();
         m_pushUrlEdit->setEnabled(false);
     }
+    updateFormHint();
 }
 
-void RemotesDialog::onRemoteSelectionChanged()
+void RemotesDialog::updateFormHint()
 {
-    const QListWidgetItem *item = m_remoteList->currentItem();
-    if (!item || !m_git) {
+    if (!m_hintLabel) {
+        return;
+    }
+
+    if (m_addMode) {
+        m_hintLabel->setText(
+            tr("Enter remote name and repository URL, then click Save."));
+    } else {
+        m_hintLabel->setText(tr("Editing selected remote. Click \"Add remote…\" to create another."));
+    }
+}
+
+void RemotesDialog::onRemoteSelectionChanged(int row)
+{
+    if (m_syncingList) {
+        return;
+    }
+
+    if (row < 0) {
+        enterAddMode();
+        return;
+    }
+
+    if (!m_git) {
+        return;
+    }
+
+    const QListWidgetItem *item = m_remoteList->item(row);
+    if (!item) {
+        enterAddMode();
         return;
     }
 
     const QString name = item->data(Qt::UserRole).toString();
     for (const GitRemote &remote : m_git->listRemotes(m_repoPath)) {
         if (remote.name == name) {
-            fillForm(remote);
+            enterEditMode(remote);
             return;
         }
     }
+
+    enterAddMode();
 }
 
 void RemotesDialog::onSeparatePushToggled(bool checked)
@@ -137,6 +213,8 @@ void RemotesDialog::onSeparatePushToggled(bool checked)
     m_pushUrlEdit->setEnabled(checked);
     if (!checked) {
         m_pushUrlEdit->clear();
+    } else {
+        m_pushUrlEdit->setFocus();
     }
 }
 
@@ -171,7 +249,7 @@ bool RemotesDialog::validateForm(QString *errorOut) const
 
     if (remote.fetchUrl.isEmpty()) {
         if (errorOut) {
-            *errorOut = tr("Fetch URL is empty");
+            *errorOut = tr("Repository URL is empty");
         }
         return false;
     }
@@ -188,7 +266,7 @@ bool RemotesDialog::validateForm(QString *errorOut) const
 
 void RemotesDialog::onAddRemote()
 {
-    clearForm();
+    enterAddMode();
     m_nameEdit->setFocus();
 }
 
@@ -201,6 +279,9 @@ void RemotesDialog::onSaveRemote()
     QString error;
     if (!validateForm(&error)) {
         QMessageBox::warning(this, tr("Remotes"), error);
+        if (remoteFromForm().fetchUrl.isEmpty()) {
+            m_fetchUrlEdit->setFocus();
+        }
         return;
     }
 
@@ -228,7 +309,7 @@ void RemotesDialog::onSaveRemote()
 
         m_modified = true;
         reloadRemotes();
-        clearForm();
+        enterAddMode();
         return;
     }
 
@@ -256,12 +337,15 @@ void RemotesDialog::onSaveRemote()
 
     m_modified = true;
     reloadRemotes();
-    for (int row = 0; row < m_remoteList->count(); ++row) {
-        if (m_remoteList->item(row)->data(Qt::UserRole).toString() == remote.name) {
-            m_remoteList->setCurrentRow(row);
+
+    m_syncingList = true;
+    for (int listRow = 0; listRow < m_remoteList->count(); ++listRow) {
+        if (m_remoteList->item(listRow)->data(Qt::UserRole).toString() == remote.name) {
+            m_remoteList->setCurrentRow(listRow);
             break;
         }
     }
+    m_syncingList = false;
 }
 
 void RemotesDialog::onRemoveRemote()
@@ -295,5 +379,6 @@ void RemotesDialog::onRemoveRemote()
 
     m_modified = true;
     reloadRemotes();
-    clearForm();
+    enterAddMode();
+    m_nameEdit->setFocus();
 }
