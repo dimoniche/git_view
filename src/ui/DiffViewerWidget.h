@@ -6,6 +6,8 @@
 #include <QVector>
 #include <QWidget>
 
+class QPoint;
+
 class QLabel;
 class QPlainTextEdit;
 class QSplitter;
@@ -24,14 +26,22 @@ public:
                     const QString &afterCaption = QString());
     void clear();
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private slots:
     void onDiffCursorChanged();
+    void onSourceCursorChanged();
 
 private:
     void configureEditor(QPlainTextEdit *editor);
     void applyAlignedSources();
     void applySourceHighlights();
     void applyDisplayLineSelection(QPlainTextEdit *editor, int displayLine);
+    void handleDiffClick(const QPoint &viewportPos);
+    void handleSourceClick(SourceCodeView *view, const QPoint &viewportPos);
+    void navigateFromDiffLineIndex(int lineIndex);
+    void navigateFromSourceDisplayRow(int displayRow);
     void revealMatchingLines(int beforeLine, int afterLine);
     int displayRowForBeforeSourceLine(int sourceLine) const;
     int displayRowForAfterSourceLine(int sourceLine) const;
@@ -49,4 +59,5 @@ private:
     DiffParser::AlignedSideBySideView m_alignedView;
     QString m_rawBefore;
     QString m_rawAfter;
+    bool m_syncingSourceNavigation = false;
 };

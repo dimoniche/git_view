@@ -65,7 +65,10 @@ QVector<DiffLineMap> buildDiffLineMap(const QString &diff)
     const QStringList lines = diff.split(QLatin1Char('\n'));
     map.reserve(lines.size());
 
-    for (const QString &line : lines) {
+    for (const QString &rawLine : lines) {
+        const QString line = rawLine.endsWith(QLatin1Char('\r'))
+                                 ? rawLine.chopped(1)
+                                 : rawLine;
         DiffLineMap entry;
 
         const QRegularExpressionMatch hunkMatch = hunkRe.match(line);
@@ -249,7 +252,44 @@ void augmentFileLineAlignmentFromDiff(FileLineAlignment *alignment,
     fillNewToOldGaps(&alignment->newToOld, alignment->newLineCount, alignment->oldLineCount);
 }
 
-AlignedSideBySideView buildAlignedSideBySideView(const QString &before, const QString &after)
+void rebuildDiffLineNavigation(AlignedSideBySideView *view, const QVector<DiffLineMap> &diffMap)
+{
+    if (!view) {
+        return;
+    }
+
+    view->diffLineToDisplayRow = QVector<int>(diffMap.size(), 0);
+    for (int index = 0; index < diffMap.size(); ++index) {
+        const DiffLineMap &entry = diffMap.at(index);
+        int row = 0;
+
+        if (entry.isHunkHeader) {
+            if (entry.oldLine > 0) {
+                row = view->beforeSourceToDisplay.value(entry.oldLine, 0);
+            }
+            if (row < 1 && entry.newLine > 0) {
+                row = view->afterSourceToDisplay.value(entry.newLine, 0);
+            }
+            view->diffLineToDisplayRow[index] = row;
+            continue;
+        }
+
+        if (entry.oldLine > 0 && entry.newLine > 0) {
+            const int oldRow = view->beforeSourceToDisplay.value(entry.oldLine, 0);
+            const int newRow = view->afterSourceToDisplay.value(entry.newLine, 0);
+            row = oldRow > 0 ? oldRow : newRow;
+        } else if (entry.oldLine > 0) {
+            row = view->beforeSourceToDisplay.value(entry.oldLine, 0);
+        } else if (entry.newLine > 0) {
+            row = view->afterSourceToDisplay.value(entry.newLine, 0);
+        }
+
+        view->diffLineToDisplayRow[index] = row;
+    }
+}
+
+AlignedSideBySideView buildAlignedSideBySideView(const QString &before, const QString &after,
+                                                const QVector<DiffLineMap> &diffMap)
 {
     const QStringList oldLines = splitSourceLines(before);
     const QStringList newLines = splitSourceLines(after);
@@ -257,130 +297,134 @@ AlignedSideBySideView buildAlignedSideBySideView(const QString &before, const QS
     const int newCount = newLines.size();
 
     AlignedSideBySideView view;
+    view.diffLineToDisplayRow = QVector<int>(diffMap.size(), 0);
+
     if (oldCount == 0 && newCount == 0) {
         return view;
-    }
-
-    if (oldCount == 0) {
-        QStringList afterDisplay;
-        for (int index = 0; index < newCount; ++index) {
-            afterDisplay.append(newLines.at(index));
-            view.afterSourceToDisplay.insert(index + 1, index + 1);
-            view.beforePaddingRows.insert(index + 1);
-        }
-        view.beforeText = QString(newCount, QLatin1Char('\n'));
-        view.afterText = afterDisplay.join(QLatin1Char('\n'));
-        return view;
-    }
-
-    if (newCount == 0) {
-        QStringList beforeDisplay;
-        for (int index = 0; index < oldCount; ++index) {
-            beforeDisplay.append(oldLines.at(index));
-            view.beforeSourceToDisplay.insert(index + 1, index + 1);
-            view.afterPaddingRows.insert(index + 1);
-        }
-        view.beforeText = beforeDisplay.join(QLatin1Char('\n'));
-        view.afterText = QString(oldCount, QLatin1Char('\n'));
-        return view;
-    }
-
-    constexpr int kMaxCells = 4'000'000;
-    if (static_cast<qint64>(oldCount + 1) * (newCount + 1) > kMaxCells) {
-        const int shared = qMin(oldCount, newCount);
-        QStringList beforeDisplay;
-        QStringList afterDisplay;
-        for (int index = 0; index < shared; ++index) {
-            beforeDisplay.append(oldLines.at(index));
-            afterDisplay.append(newLines.at(index));
-            const int displayRow = index + 1;
-            view.beforeSourceToDisplay.insert(index + 1, displayRow);
-            view.afterSourceToDisplay.insert(index + 1, displayRow);
-        }
-        for (int index = shared; index < oldCount; ++index) {
-            beforeDisplay.append(oldLines.at(index));
-            afterDisplay.append(QString());
-            const int displayRow = beforeDisplay.size();
-            view.beforeSourceToDisplay.insert(index + 1, displayRow);
-            view.afterPaddingRows.insert(displayRow);
-        }
-        for (int index = shared; index < newCount; ++index) {
-            beforeDisplay.append(QString());
-            afterDisplay.append(newLines.at(index));
-            const int displayRow = beforeDisplay.size();
-            view.afterSourceToDisplay.insert(index + 1, displayRow);
-            view.beforePaddingRows.insert(displayRow);
-        }
-        view.beforeText = beforeDisplay.join(QLatin1Char('\n'));
-        view.afterText = afterDisplay.join(QLatin1Char('\n'));
-        return view;
-    }
-
-    QVector<QVector<int>> dp(oldCount + 1, QVector<int>(newCount + 1, 0));
-    for (int oldIdx = 1; oldIdx <= oldCount; ++oldIdx) {
-        for (int newIdx = 1; newIdx <= newCount; ++newIdx) {
-            if (oldLines.at(oldIdx - 1) == newLines.at(newIdx - 1)) {
-                dp[oldIdx][newIdx] = dp[oldIdx - 1][newIdx - 1] + 1;
-            } else {
-                dp[oldIdx][newIdx] = qMax(dp[oldIdx - 1][newIdx], dp[oldIdx][newIdx - 1]);
-            }
-        }
-    }
-
-    enum class EditKind { Match, OldOnly, NewOnly };
-    struct Edit {
-        EditKind kind;
-        int oldIndex = 0;
-        int newIndex = 0;
-    };
-
-    QVector<Edit> edits;
-    int oldIdx = oldCount;
-    int newIdx = newCount;
-    while (oldIdx > 0 || newIdx > 0) {
-        if (oldIdx > 0 && newIdx > 0 && oldLines.at(oldIdx - 1) == newLines.at(newIdx - 1)) {
-            edits.prepend({EditKind::Match, oldIdx, newIdx});
-            --oldIdx;
-            --newIdx;
-        } else if (newIdx > 0
-                   && (oldIdx == 0 || dp[oldIdx][newIdx - 1] >= dp[oldIdx - 1][newIdx])) {
-            edits.prepend({EditKind::NewOnly, 0, newIdx});
-            --newIdx;
-        } else {
-            edits.prepend({EditKind::OldOnly, oldIdx, 0});
-            --oldIdx;
-        }
     }
 
     QStringList beforeDisplay;
     QStringList afterDisplay;
     int displayRow = 0;
-    for (const Edit &edit : edits) {
+    int oldPtr = 1;
+    int newPtr = 1;
+
+    const auto appendMatch = [&](int oldLine, int newLine) -> bool {
+        if (oldLine < 1 || newLine < 1 || oldLine > oldCount || newLine > newCount) {
+            return false;
+        }
+        if (view.beforeSourceToDisplay.contains(oldLine)
+            || view.afterSourceToDisplay.contains(newLine)) {
+            return false;
+        }
         ++displayRow;
-        switch (edit.kind) {
-        case EditKind::Match:
-            beforeDisplay.append(oldLines.at(edit.oldIndex - 1));
-            afterDisplay.append(newLines.at(edit.newIndex - 1));
-            view.beforeSourceToDisplay.insert(edit.oldIndex, displayRow);
-            view.afterSourceToDisplay.insert(edit.newIndex, displayRow);
-            break;
-        case EditKind::OldOnly:
-            beforeDisplay.append(oldLines.at(edit.oldIndex - 1));
-            afterDisplay.append(QString());
-            view.beforeSourceToDisplay.insert(edit.oldIndex, displayRow);
-            view.afterPaddingRows.insert(displayRow);
-            break;
-        case EditKind::NewOnly:
-            beforeDisplay.append(QString());
-            afterDisplay.append(newLines.at(edit.newIndex - 1));
-            view.afterSourceToDisplay.insert(edit.newIndex, displayRow);
-            view.beforePaddingRows.insert(displayRow);
-            break;
+        beforeDisplay.append(oldLines.at(oldLine - 1));
+        afterDisplay.append(newLines.at(newLine - 1));
+        view.beforeSourceToDisplay.insert(oldLine, displayRow);
+        view.afterSourceToDisplay.insert(newLine, displayRow);
+        return true;
+    };
+
+    const auto appendOldOnly = [&](int oldLine) -> bool {
+        if (oldLine < 1 || oldLine > oldCount || view.beforeSourceToDisplay.contains(oldLine)) {
+            return false;
+        }
+        ++displayRow;
+        beforeDisplay.append(oldLines.at(oldLine - 1));
+        afterDisplay.append(QString());
+        view.beforeSourceToDisplay.insert(oldLine, displayRow);
+        view.afterPaddingRows.insert(displayRow);
+        return true;
+    };
+
+    const auto appendNewOnly = [&](int newLine) -> bool {
+        if (newLine < 1 || newLine > newCount || view.afterSourceToDisplay.contains(newLine)) {
+            return false;
+        }
+        ++displayRow;
+        beforeDisplay.append(QString());
+        afterDisplay.append(newLines.at(newLine - 1));
+        view.afterSourceToDisplay.insert(newLine, displayRow);
+        view.beforePaddingRows.insert(displayRow);
+        return true;
+    };
+
+    const auto syncTo = [&](int targetOld, int targetNew) {
+        while (oldPtr < targetOld && newPtr < targetNew) {
+            if (!appendMatch(oldPtr, newPtr)) {
+                break;
+            }
+            ++oldPtr;
+            ++newPtr;
+        }
+        while (oldPtr < targetOld) {
+            if (!appendOldOnly(oldPtr)) {
+                break;
+            }
+            ++oldPtr;
+        }
+        while (newPtr < targetNew) {
+            if (!appendNewOnly(newPtr)) {
+                break;
+            }
+            ++newPtr;
+        }
+    };
+
+    if (diffMap.isEmpty()) {
+        const int shared = qMin(oldCount, newCount);
+        for (int index = 0; index < shared; ++index) {
+            appendMatch(index + 1, index + 1);
+        }
+        for (int index = shared; index < oldCount; ++index) {
+            appendOldOnly(index + 1);
+        }
+        for (int index = shared; index < newCount; ++index) {
+            appendNewOnly(index + 1);
+        }
+        view.beforeText = beforeDisplay.join(QLatin1Char('\n'));
+        view.afterText = afterDisplay.join(QLatin1Char('\n'));
+        rebuildDiffLineNavigation(&view, diffMap);
+        return view;
+    }
+
+    for (int diffIndex = 0; diffIndex < diffMap.size(); ++diffIndex) {
+        const DiffLineMap &entry = diffMap.at(diffIndex);
+
+        if (entry.isHunkHeader) {
+            syncTo(entry.oldLine, entry.newLine);
+            continue;
+        }
+
+        const bool hasOld = entry.oldLine > 0;
+        const bool hasNew = entry.newLine > 0;
+
+        if (hasOld && hasNew) {
+            syncTo(entry.oldLine, entry.newLine);
+            if (appendMatch(entry.oldLine, entry.newLine)) {
+                oldPtr = entry.oldLine + 1;
+                newPtr = entry.newLine + 1;
+            }
+        } else if (hasOld) {
+            syncTo(entry.oldLine, newPtr);
+            if (appendOldOnly(entry.oldLine)) {
+                oldPtr = entry.oldLine + 1;
+                view.beforeChangedRows.insert(displayRow);
+            }
+        } else if (hasNew) {
+            syncTo(oldPtr, entry.newLine);
+            if (appendNewOnly(entry.newLine)) {
+                newPtr = entry.newLine + 1;
+                view.afterChangedRows.insert(displayRow);
+            }
         }
     }
 
+    syncTo(oldCount + 1, newCount + 1);
+
     view.beforeText = beforeDisplay.join(QLatin1Char('\n'));
     view.afterText = afterDisplay.join(QLatin1Char('\n'));
+    rebuildDiffLineNavigation(&view, diffMap);
     return view;
 }
 
@@ -391,29 +435,8 @@ void applyDiffHighlightsToAlignedView(AlignedSideBySideView *view,
         return;
     }
 
-    view->beforeChangedRows.clear();
-    view->afterChangedRows.clear();
-
-    for (const DiffLineMap &entry : diffMap) {
-        if (entry.isHunkHeader) {
-            continue;
-        }
-
-        const bool hasOld = entry.oldLine > 0;
-        const bool hasNew = entry.newLine > 0;
-
-        if (hasOld && !hasNew) {
-            const int displayRow = view->beforeSourceToDisplay.value(entry.oldLine, 0);
-            if (displayRow > 0) {
-                view->beforeChangedRows.insert(displayRow);
-            }
-        } else if (hasNew && !hasOld) {
-            const int displayRow = view->afterSourceToDisplay.value(entry.newLine, 0);
-            if (displayRow > 0) {
-                view->afterChangedRows.insert(displayRow);
-            }
-        }
-    }
+    Q_UNUSED(diffMap);
+    // Changed rows are assigned during buildAlignedSideBySideView.
 }
 
 } // namespace DiffParser

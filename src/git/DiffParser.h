@@ -25,6 +25,7 @@ struct AlignedSideBySideView {
     QString afterText;
     QHash<int, int> beforeSourceToDisplay;
     QHash<int, int> afterSourceToDisplay;
+    QVector<int> diffLineToDisplayRow;
     QSet<int> beforePaddingRows;
     QSet<int> afterPaddingRows;
     QSet<int> beforeChangedRows;
@@ -35,7 +36,8 @@ QVector<DiffLineMap> buildDiffLineMap(const QString &diff);
 FileLineAlignment buildFileLineAlignment(const QString &before, const QString &after);
 void augmentFileLineAlignmentFromDiff(FileLineAlignment *alignment,
                                       const QVector<DiffLineMap> &diffMap);
-AlignedSideBySideView buildAlignedSideBySideView(const QString &before, const QString &after);
+AlignedSideBySideView buildAlignedSideBySideView(const QString &before, const QString &after,
+                                                const QVector<DiffLineMap> &diffMap);
 void applyDiffHighlightsToAlignedView(AlignedSideBySideView *view,
                                       const QVector<DiffLineMap> &diffMap);
 

@@ -50,14 +50,59 @@ void SourceCodeView::revealDisplayLineCentered(int displayLine)
         return;
     }
 
-    const QRectF blockRect = blockBoundingGeometry(block);
-    const int targetScroll =
-        qRound(blockRect.top() - (viewport()->height() - blockRect.height()) / 2.0);
+    m_syncingScroll = true;
+    if (m_scrollPartner) {
+        m_scrollPartner->m_syncingScroll = true;
+    }
 
-    m_scrollSyncMuted = true;
-    setVerticalScrollValue(targetScroll);
-    syncPartnerNow();
-    m_scrollSyncMuted = false;
+    QTextCursor cursor(block);
+    cursor.clearSelection();
+    setTextCursor(cursor);
+    centerCursor();
+
+    if (m_scrollPartner) {
+        const QTextBlock partnerBlock =
+            m_scrollPartner->document()->findBlockByNumber(displayLine - 1);
+        if (partnerBlock.isValid()) {
+            QTextCursor partnerCursor(partnerBlock);
+            partnerCursor.clearSelection();
+            m_scrollPartner->setTextCursor(partnerCursor);
+            m_scrollPartner->centerCursor();
+        }
+    }
+
+    if (m_scrollPartner) {
+        m_scrollPartner->m_syncingScroll = false;
+    }
+    m_syncingScroll = false;
+}
+
+int SourceCodeView::partnerScrollValueFor(int localScrollValue) const
+{
+    if (!m_scrollPartner) {
+        return localScrollValue;
+    }
+
+    const QScrollBar *bar = verticalScrollBar();
+    const QScrollBar *partnerBar = m_scrollPartner->verticalScrollBar();
+    if (bar->maximum() == partnerBar->maximum()) {
+        return localScrollValue;
+    }
+
+    const qreal ratio = bar->maximum() > 0
+                            ? static_cast<qreal>(localScrollValue) / static_cast<qreal>(bar->maximum())
+                            : 0.0;
+    return qRound(ratio * static_cast<qreal>(partnerBar->maximum()));
+}
+
+void SourceCodeView::pushScrollToPartner(int localScrollValue)
+{
+    if (!m_scrollPartner) {
+        return;
+    }
+
+    const int partnerValue = partnerScrollValueFor(localScrollValue);
+    m_scrollPartner->setVerticalScrollValue(partnerValue);
 }
 
 void SourceCodeView::schedulePartnerSync()
@@ -78,13 +123,7 @@ void SourceCodeView::syncPartnerNow()
     QScrollBar *bar = verticalScrollBar();
     QScrollBar *partnerBar = m_scrollPartner->verticalScrollBar();
     const int value = bar->value();
-
-    int partnerValue = value;
-    if (bar->maximum() != partnerBar->maximum()) {
-        const qreal ratio =
-            bar->maximum() > 0 ? static_cast<qreal>(value) / static_cast<qreal>(bar->maximum()) : 0.0;
-        partnerValue = qRound(ratio * static_cast<qreal>(partnerBar->maximum()));
-    }
+    const int partnerValue = partnerScrollValueFor(value);
 
     if (partnerBar->value() == partnerValue) {
         return;
@@ -92,7 +131,7 @@ void SourceCodeView::syncPartnerNow()
 
     m_syncingScroll = true;
     m_scrollPartner->m_syncingScroll = true;
-    partnerBar->setValue(partnerValue);
+    m_scrollPartner->setVerticalScrollValue(partnerValue);
     m_scrollPartner->m_syncingScroll = false;
     m_syncingScroll = false;
 }

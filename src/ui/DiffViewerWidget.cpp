@@ -8,7 +8,9 @@
 #include <QFont>
 #include <QFontMetrics>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPlainTextEdit>
+#include <QPoint>
 #include <QSplitter>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -79,16 +81,73 @@ DiffViewerWidget::DiffViewerWidget(QWidget *parent)
     m_beforeView->setScrollPartner(m_afterView);
     m_afterView->setScrollPartner(m_beforeView);
 
+    connect(m_beforeView, &QPlainTextEdit::cursorPositionChanged, this,
+            &DiffViewerWidget::onSourceCursorChanged);
+    connect(m_afterView, &QPlainTextEdit::cursorPositionChanged, this,
+            &DiffViewerWidget::onSourceCursorChanged);
+
     m_rootSplitter->addWidget(m_diffView);
     m_rootSplitter->addWidget(m_sourceSplitter);
     m_rootSplitter->setStretchFactor(0, 1);
     m_rootSplitter->setStretchFactor(1, 1);
     m_rootSplitter->setSizes({480, 480});
 
+    m_diffView->viewport()->installEventFilter(this);
+    m_beforeView->viewport()->installEventFilter(this);
+    m_afterView->viewport()->installEventFilter(this);
+
     m_sourceSplitter->setStretchFactor(0, 1);
     m_sourceSplitter->setStretchFactor(1, 1);
     m_sourceSplitter->setSizes({360, 360});
     m_sourceSplitter->setVisible(false);
+}
+
+bool DiffViewerWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::MouseButtonPress) {
+        const auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            if (watched == m_diffView->viewport()) {
+                handleDiffClick(mouseEvent->pos());
+            } else if (watched == m_beforeView->viewport()) {
+                handleSourceClick(m_beforeView, mouseEvent->pos());
+            } else if (watched == m_afterView->viewport()) {
+                handleSourceClick(m_afterView, mouseEvent->pos());
+            }
+        }
+    }
+
+    return QWidget::eventFilter(watched, event);
+}
+
+void DiffViewerWidget::handleDiffClick(const QPoint &viewportPos)
+{
+    if (m_lineMap.isEmpty() || !m_sourceSplitter->isVisible()) {
+        return;
+    }
+
+    const QTextCursor cursor = m_diffView->cursorForPosition(viewportPos);
+    if (cursor.isNull()) {
+        return;
+    }
+
+    m_diffView->setTextCursor(cursor);
+    navigateFromDiffLineIndex(cursor.blockNumber());
+}
+
+void DiffViewerWidget::handleSourceClick(SourceCodeView *view, const QPoint &viewportPos)
+{
+    if (!view || m_syncingSourceNavigation || !m_sourceSplitter->isVisible()) {
+        return;
+    }
+
+    const QTextCursor cursor = view->cursorForPosition(viewportPos);
+    if (cursor.isNull()) {
+        return;
+    }
+
+    view->setTextCursor(cursor);
+    navigateFromSourceDisplayRow(cursor.blockNumber() + 1);
 }
 
 void DiffViewerWidget::configureEditor(QPlainTextEdit *editor)
@@ -132,7 +191,8 @@ void DiffViewerWidget::setSources(const QString &beforeText, const QString &afte
 
 void DiffViewerWidget::applyAlignedSources()
 {
-    m_alignedView = DiffParser::buildAlignedSideBySideView(m_rawBefore, m_rawAfter);
+    m_alignedView =
+        DiffParser::buildAlignedSideBySideView(m_rawBefore, m_rawAfter, m_lineMap);
     DiffParser::applyDiffHighlightsToAlignedView(&m_alignedView, m_lineMap);
 
     m_beforeView->setPlainText(m_alignedView.beforeText);
@@ -188,19 +248,63 @@ void DiffViewerWidget::onDiffCursorChanged()
         return;
     }
 
-    const int lineIndex = m_diffView->textCursor().blockNumber();
+    navigateFromDiffLineIndex(m_diffView->textCursor().blockNumber());
+}
+
+void DiffViewerWidget::navigateFromDiffLineIndex(int lineIndex)
+{
     if (lineIndex < 0 || lineIndex >= m_lineMap.size()) {
         return;
     }
 
     const DiffParser::DiffLineMap &mapped = m_lineMap.at(lineIndex);
-    const int beforeLine = mapped.oldLine > 0 ? mapped.oldLine : -1;
-    const int afterLine = mapped.newLine > 0 ? mapped.newLine : -1;
 
-    revealMatchingLines(beforeLine, afterLine);
+    m_syncingSourceNavigation = true;
 
-    const int displayRow = beforeLine > 0 ? displayRowForBeforeSourceLine(beforeLine)
-                                          : displayRowForAfterSourceLine(afterLine);
+    int displayRow = 0;
+    if (lineIndex < m_alignedView.diffLineToDisplayRow.size()) {
+        displayRow = m_alignedView.diffLineToDisplayRow.at(lineIndex);
+    }
+    if (displayRow < 1) {
+        const int beforeLine = mapped.oldLine > 0 ? mapped.oldLine : -1;
+        const int afterLine = mapped.newLine > 0 ? mapped.newLine : -1;
+        if (beforeLine > 0) {
+            displayRow = displayRowForBeforeSourceLine(beforeLine);
+        } else if (afterLine > 0) {
+            displayRow = displayRowForAfterSourceLine(afterLine);
+        }
+    }
+
+    if (displayRow > 0) {
+        m_beforeView->revealDisplayLineCentered(displayRow);
+        applyDisplayLineSelection(m_beforeView, displayRow);
+        applyDisplayLineSelection(m_afterView, displayRow);
+    }
+
+    m_syncingSourceNavigation = false;
+}
+
+void DiffViewerWidget::onSourceCursorChanged()
+{
+    if (m_syncingSourceNavigation || !m_sourceSplitter->isVisible()) {
+        return;
+    }
+
+    auto *source = qobject_cast<SourceCodeView *>(sender());
+    if (!source) {
+        return;
+    }
+
+    navigateFromSourceDisplayRow(source->textCursor().blockNumber() + 1);
+}
+
+void DiffViewerWidget::navigateFromSourceDisplayRow(int displayRow)
+{
+    if (displayRow < 1) {
+        return;
+    }
+
+    m_beforeView->revealDisplayLineCentered(displayRow);
     applyDisplayLineSelection(m_beforeView, displayRow);
     applyDisplayLineSelection(m_afterView, displayRow);
 }
@@ -208,17 +312,20 @@ void DiffViewerWidget::onDiffCursorChanged()
 void DiffViewerWidget::revealMatchingLines(int beforeLine, int afterLine)
 {
     int displayRow = 0;
+    SourceCodeView *leader = m_beforeView;
+
     if (beforeLine > 0) {
         displayRow = displayRowForBeforeSourceLine(beforeLine);
     } else if (afterLine > 0) {
         displayRow = displayRowForAfterSourceLine(afterLine);
+        leader = m_afterView;
     }
 
     if (displayRow < 1) {
         return;
     }
 
-    m_beforeView->revealDisplayLineCentered(displayRow);
+    leader->revealDisplayLineCentered(displayRow);
 }
 
 void DiffViewerWidget::applyDisplayLineSelection(QPlainTextEdit *editor, int displayLine)

@@ -26,6 +26,8 @@ protected:
 private:
     void schedulePartnerSync();
     void syncPartnerNow();
+    void pushScrollToPartner(int localScrollValue);
+    int partnerScrollValueFor(int localScrollValue) const;
 
     SourceCodeView *m_scrollPartner = nullptr;
     bool m_syncingScroll = false;
