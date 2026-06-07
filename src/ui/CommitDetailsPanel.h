@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/CommitDetails.h"
+#include "ui/DiffViewerDialog.h"
 
 #include <QString>
 
@@ -30,6 +31,7 @@ private slots:
 private:
     void loadDiffForCurrentFile();
     void openDiffInSeparateWindow();
+    DiffViewerSources buildSourcesForFile(const QString &path) const;
     void showDiffText(const QString &text, const QString &title);
 
     QString m_repoPath;

@@ -5,6 +5,7 @@
 #include "ui/DiffViewerDialog.h"
 
 #include <QFont>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QLabel>
@@ -13,6 +14,25 @@
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QVBoxLayout>
+
+namespace {
+
+QString fileContentText(const WorkingFileContent &content, const QString &missingLabel,
+                        const QString &binaryLabel)
+{
+    if (content.binary) {
+        return content.content.isEmpty() ? binaryLabel : content.content;
+    }
+    if (content.missing) {
+        return missingLabel;
+    }
+    if (content.ok) {
+        return content.content;
+    }
+    return content.error;
+}
+
+} // namespace
 
 CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     : QWidget(parent)
@@ -55,7 +75,8 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     m_diffView = new QPlainTextEdit(diffWidget);
     m_diffView->setReadOnly(true);
     m_diffView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_diffView->setTabStopDistance(QFontMetrics(m_diffView->font()).horizontalAdvance(QLatin1Char(' ')) * 4);
+    m_diffView->setTabStopDistance(
+        QFontMetrics(m_diffView->font()).horizontalAdvance(QLatin1Char(' ')) * 4);
 
     QFont diffFont = m_diffView->font();
     diffFont.setStyleHint(QFont::Monospace);
@@ -66,7 +87,6 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     diffFont.setFamily(QStringLiteral("Monospace"));
 #endif
     m_diffView->setFont(diffFont);
-
     new DiffHighlighter(m_diffView->document());
     diffLayout->addWidget(m_diffView);
 
@@ -202,6 +222,31 @@ void CommitDetailsPanel::loadDiffForCurrentFile()
     showDiffText(diff, m_diffTitle->text());
 }
 
+DiffViewerSources CommitDetailsPanel::buildSourcesForFile(const QString &path) const
+{
+    DiffViewerSources sources;
+    sources.beforeCaption = tr("Before (parent)");
+    sources.afterCaption = tr("After (commit)");
+
+    if (!m_git || m_repoPath.isEmpty() || m_commitHash.isEmpty()) {
+        return sources;
+    }
+
+    const WorkingFileContent before =
+        m_git->commitFileContent(m_repoPath, m_commitHash, path, WorkingFileSide::Before);
+    const WorkingFileContent after =
+        m_git->commitFileContent(m_repoPath, m_commitHash, path, WorkingFileSide::After);
+
+    sources.before = fileContentText(
+        before, tr("(file did not exist in parent commit)"),
+        tr("(binary file — cannot display as text)"));
+    sources.after = fileContentText(
+        after, tr("(file removed in this commit)"),
+        tr("(binary file — cannot display as text)"));
+
+    return sources;
+}
+
 void CommitDetailsPanel::openDiffInSeparateWindow()
 {
     if (!m_git || m_repoPath.isEmpty() || m_commitHash.isEmpty()) {
@@ -229,7 +274,7 @@ void CommitDetailsPanel::openDiffInSeparateWindow()
         return;
     }
 
-    DiffViewerDialog::showDiff(this, title, diff);
+    DiffViewerDialog::showDiff(this, title, diff, buildSourcesForFile(path));
 }
 
 void CommitDetailsPanel::showDiffText(const QString &text, const QString &title)

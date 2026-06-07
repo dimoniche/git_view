@@ -22,6 +22,9 @@ set(GIT_VIEW_SOURCES
     ui/VtermTerminalWidget.cpp
     ui/DiffHighlighter.cpp
     ui/DiffViewerDialog.cpp
+    ui/DiffViewerWidget.cpp
+    ui/SourceChangeHighlighter.cpp
+    ui/SourceCodeView.cpp
 )
 
 add_executable(git_view ${GIT_VIEW_SOURCES})

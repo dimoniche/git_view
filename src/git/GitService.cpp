@@ -1349,6 +1349,198 @@ QString GitService::commitFileDiff(const QString &repoPath,
     return diff;
 }
 
+WorkingFileContent GitService::workingTreeFileContent(const QString &repoPath,
+                                                      const QString &path,
+                                                      WorkingDiffScope scope,
+                                                      const WorkingTreeChange &change,
+                                                      WorkingFileSide side) const
+{
+    m_lastError.clear();
+
+    WorkingFileContent result;
+    const QString normalizedPath = StatusParser::normalizeGitPath(path);
+    if (normalizedPath.isEmpty()) {
+        result.error = QStringLiteral("File path is empty");
+        return result;
+    }
+
+    const QStringList diffPaths = pathsForDiff(normalizedPath);
+    if (diffPaths.isEmpty()) {
+        result.error = QStringLiteral("File path is empty");
+        return result;
+    }
+    const QString gitPath = diffPaths.front();
+
+    const auto headExists = [&]() {
+        return m_runner
+            .run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                            QStringLiteral("HEAD")})
+            .success();
+    };
+
+    const auto readGitSpec = [&](const QString &spec) -> WorkingFileContent {
+        WorkingFileContent blob;
+        const GitProcessResult showResult =
+            m_runner.run(repoPath, {QStringLiteral("show"), spec});
+        if (showResult.stderrText.contains(QStringLiteral("Binary files"), Qt::CaseInsensitive)
+            || showResult.stderrText.contains(QStringLiteral("binary file"), Qt::CaseInsensitive)) {
+            blob.ok = true;
+            blob.binary = true;
+            blob.content = showResult.stderrText.trimmed();
+            return blob;
+        }
+        if (!showResult.success()) {
+            if (showResult.stderrText.contains(QStringLiteral("exists on disk"),
+                                               Qt::CaseInsensitive)
+                || showResult.stderrText.contains(QStringLiteral("does not exist"),
+                                                  Qt::CaseInsensitive)
+                || showResult.stderrText.contains(QStringLiteral("bad revision"),
+                                                  Qt::CaseInsensitive)) {
+                blob.missing = true;
+                return blob;
+            }
+            blob.error = showResult.stderrText.trimmed();
+            if (blob.error.isEmpty()) {
+                blob.error = QStringLiteral("git show failed");
+            }
+            return blob;
+        }
+        blob.ok = true;
+        blob.content = showResult.stdoutText;
+        return blob;
+    };
+
+    const auto readWorktree = [&]() -> WorkingFileContent {
+        WorkingFileContent file;
+        const QString absPath = QDir(repoPath).filePath(gitPath);
+        QFile io(absPath);
+        if (!io.exists()) {
+            file.missing = true;
+            return file;
+        }
+        if (!io.open(QIODevice::ReadOnly)) {
+            file.error = io.errorString();
+            return file;
+        }
+        const QByteArray bytes = io.readAll();
+        if (bytes.contains('\0')) {
+            file.ok = true;
+            file.binary = true;
+            file.content = QStringLiteral("Binary file (%1 bytes).").arg(bytes.size());
+            return file;
+        }
+        file.ok = true;
+        file.content = QString::fromUtf8(bytes);
+        return file;
+    };
+
+    switch (scope) {
+    case WorkingDiffScope::Staged:
+        if (side == WorkingFileSide::Before) {
+            if (!headExists()) {
+                result.missing = true;
+                return result;
+            }
+            return readGitSpec(QStringLiteral("HEAD:") + gitPath);
+        }
+        return readGitSpec(QStringLiteral(":") + gitPath);
+
+    case WorkingDiffScope::AgainstHead:
+        if (side == WorkingFileSide::Before) {
+            if (!headExists()) {
+                result.missing = true;
+                return result;
+            }
+            return readGitSpec(QStringLiteral("HEAD:") + gitPath);
+        }
+        return readWorktree();
+
+    case WorkingDiffScope::Unstaged:
+        if (change.isUntracked()) {
+            if (side == WorkingFileSide::Before) {
+                result.missing = true;
+                return result;
+            }
+            return readWorktree();
+        }
+        if (side == WorkingFileSide::Before) {
+            const WorkingFileContent index = readGitSpec(QStringLiteral(":") + gitPath);
+            if (index.ok || index.binary || !index.error.isEmpty()) {
+                return index;
+            }
+            if (!headExists()) {
+                result.missing = true;
+                return result;
+            }
+            return readGitSpec(QStringLiteral("HEAD:") + gitPath);
+        }
+        return readWorktree();
+    }
+
+    result.error = QStringLiteral("Unsupported scope");
+    return result;
+}
+
+WorkingFileContent GitService::commitFileContent(const QString &repoPath,
+                                                 const QString &hash,
+                                                 const QString &path,
+                                                 WorkingFileSide side) const
+{
+    m_lastError.clear();
+
+    WorkingFileContent result;
+    const QString normalizedPath = StatusParser::normalizeGitPath(path);
+    if (normalizedPath.isEmpty() || hash.isEmpty()) {
+        result.error = QStringLiteral("File path or commit is empty");
+        return result;
+    }
+
+    const QString gitPath = pathsForDiff(normalizedPath).value(0);
+    if (gitPath.isEmpty()) {
+        result.error = QStringLiteral("File path is empty");
+        return result;
+    }
+
+    const auto readGitSpec = [&](const QString &spec) -> WorkingFileContent {
+        WorkingFileContent blob;
+        const GitProcessResult showResult =
+            m_runner.run(repoPath, {QStringLiteral("show"), spec});
+        if (showResult.stderrText.contains(QStringLiteral("Binary files"), Qt::CaseInsensitive)
+            || showResult.stderrText.contains(QStringLiteral("binary file"), Qt::CaseInsensitive)) {
+            blob.ok = true;
+            blob.binary = true;
+            blob.content = showResult.stderrText.trimmed();
+            return blob;
+        }
+        if (!showResult.success()) {
+            blob.missing = true;
+            return blob;
+        }
+        blob.ok = true;
+        blob.content = showResult.stdoutText;
+        return blob;
+    };
+
+    if (side == WorkingFileSide::After) {
+        return readGitSpec(hash + QLatin1Char(':') + gitPath);
+    }
+
+    const GitProcessResult parentResult =
+        m_runner.run(repoPath, {QStringLiteral("rev-parse"), hash + QStringLiteral("^")});
+    if (!parentResult.success()) {
+        result.missing = true;
+        return result;
+    }
+
+    const QString parentHash = parentResult.stdoutText.trimmed();
+    if (parentHash.isEmpty()) {
+        result.missing = true;
+        return result;
+    }
+
+    return readGitSpec(parentHash + QLatin1Char(':') + gitPath);
+}
+
 GitProcessResult GitService::mergeAbort(const QString &repoPath) const
 {
     m_lastError.clear();

@@ -2,6 +2,7 @@
 
 #include "core/WorkingTreeChange.h"
 #include "git/GitService.h"
+#include "ui/DiffViewerDialog.h"
 
 #include <QWidget>
 #include <vector>
@@ -42,6 +43,8 @@ private slots:
 private:
     void loadDiffForCurrentFile();
     void openDiffInSeparateWindow();
+    DiffViewerSources buildSourcesForFile(const QString &path, WorkingDiffScope scope,
+                                          const WorkingTreeChange &change) const;
     void showDiffText(const QString &text, const QString &title);
     void rebuildChangeTree();
     void selectTreeItem(const QString &path, WorkingDiffScope scope);

@@ -27,6 +27,19 @@ enum class WorkingDiffScope {
     AgainstHead,
 };
 
+enum class WorkingFileSide {
+    Before,
+    After,
+};
+
+struct WorkingFileContent {
+    bool ok = false;
+    bool missing = false;
+    bool binary = false;
+    QString content;
+    QString error;
+};
+
 class GitService {
 public:
     explicit GitService(GitProcessRunner runner = {});
@@ -111,6 +124,15 @@ public:
                                 const QString &path,
                                 WorkingDiffScope scope,
                                 const WorkingTreeChange &change) const;
+    WorkingFileContent workingTreeFileContent(const QString &repoPath,
+                                              const QString &path,
+                                              WorkingDiffScope scope,
+                                              const WorkingTreeChange &change,
+                                              WorkingFileSide side) const;
+    WorkingFileContent commitFileContent(const QString &repoPath,
+                                         const QString &hash,
+                                         const QString &path,
+                                         WorkingFileSide side) const;
 
     QString lastError() const { return m_lastError; }
     QString lastDiffCommand() const { return m_lastDiffCommand; }

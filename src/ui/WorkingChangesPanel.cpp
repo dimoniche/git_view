@@ -2,7 +2,6 @@
 
 #include "core/WorkingTreeChange.h"
 #include "git/GitService.h"
-#include "ui/DiffHighlighter.h"
 #include "ui/DiffViewerDialog.h"
 
 #include <QFileInfo>
@@ -19,6 +18,8 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
+
+#include "ui/DiffHighlighter.h"
 
 namespace {
 
@@ -67,6 +68,21 @@ QFont headerFont(const QFont &base)
     QFont font = base;
     font.setBold(true);
     return font;
+}
+
+QString fileContentText(const WorkingFileContent &content, const QString &missingLabel,
+                        const QString &binaryLabel)
+{
+    if (content.binary) {
+        return content.content.isEmpty() ? binaryLabel : content.content;
+    }
+    if (content.missing) {
+        return missingLabel;
+    }
+    if (content.ok) {
+        return content.content;
+    }
+    return content.error;
 }
 
 } // namespace
@@ -681,7 +697,33 @@ void WorkingChangesPanel::openDiffInSeparateWindow()
         return;
     }
 
-    DiffViewerDialog::showDiff(this, title, diff);
+    const DiffViewerSources sources = buildSourcesForFile(path, scope, change);
+    DiffViewerDialog::showDiff(this, title, diff, sources);
+}
+
+DiffViewerSources WorkingChangesPanel::buildSourcesForFile(const QString &path,
+                                                           WorkingDiffScope scope,
+                                                           const WorkingTreeChange &change) const
+{
+    DiffViewerSources sources;
+    sources.beforeCaption = tr("Before");
+    sources.afterCaption = tr("After");
+
+    if (!m_git || m_repoPath.isEmpty()) {
+        return sources;
+    }
+
+    const WorkingFileContent before =
+        m_git->workingTreeFileContent(m_repoPath, path, scope, change, WorkingFileSide::Before);
+    const WorkingFileContent after =
+        m_git->workingTreeFileContent(m_repoPath, path, scope, change, WorkingFileSide::After);
+
+    sources.before = fileContentText(
+        before, tr("(no previous version)"), tr("(binary file — cannot display as text)"));
+    sources.after = fileContentText(after, tr("(file not on disk)"),
+                                    tr("(binary file — cannot display as text)"));
+
+    return sources;
 }
 
 void WorkingChangesPanel::showDiffText(const QString &text, const QString &title)
