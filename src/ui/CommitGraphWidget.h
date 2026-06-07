@@ -42,5 +42,4 @@ private:
     static constexpr int kLaneWidth = 18;
     static constexpr int kGraphPadding = 10;
     static constexpr int kLabelPadding = 6;
-    static constexpr int kMaxLabelWidth = 180;
 };

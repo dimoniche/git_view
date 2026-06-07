@@ -104,7 +104,7 @@ int CommitGraphWidget::labelAreaWidth() const
     for (const GraphLaneLabel &label : m_layout.laneLabels) {
         maxWidth = std::max(maxWidth, fm.horizontalAdvance(label.name));
     }
-    return std::min(maxWidth, kMaxLabelWidth) + kLabelPadding;
+    return maxWidth + kLabelPadding;
 }
 
 int CommitGraphWidget::naturalWidth() const
@@ -187,7 +187,6 @@ void CommitGraphWidget::paintEvent(QPaintEvent *event)
     }
 
     if (!m_layout.laneLabels.empty()) {
-        const QFontMetrics fm(painter.font());
         const int labelX = graphLanesWidth() + kLabelPadding;
         const int labelWidth = width() - labelX;
 
@@ -205,10 +204,8 @@ void CommitGraphWidget::paintEvent(QPaintEvent *event)
                 painter.setPen(palette().color(QPalette::Text));
             }
 
-            const QString text =
-                fm.elidedText(label.name, Qt::ElideRight, std::max(20, labelWidth));
             painter.drawText(labelX, y, labelWidth, m_rowHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                             text);
+                             label.name);
         }
     }
 }
