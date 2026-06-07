@@ -97,6 +97,7 @@ private:
     int currentBranchRow() const;
     void selectBranchRow(int row, bool updateLog);
     void selectCurrentBranch();
+    void restoreBranchListSelection();
     QString pickRemoteForBranch(const Branch &branch, const QString &title);
     QString pickRemoteForFetch(const QString &title);
 
@@ -141,4 +142,5 @@ private:
     QAction *m_pullAction = nullptr;
     QAction *m_toggleTerminalAction = nullptr;
     QMenu *m_recentReposMenu = nullptr;
+    bool m_syncingBranchList = false;
 };

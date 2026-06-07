@@ -22,6 +22,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QItemSelectionModel>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
@@ -808,6 +809,11 @@ void MainWindow::commitChanges()
     }
 
     QMessageBox::information(this, tr("Commit"), resultMessage);
+
+    if (!currentBranch.name.isEmpty() && !currentBranch.isRemote
+        && !GitService::isPseudoDetachedBranchName(currentBranch.name)) {
+        m_branchFilter = currentBranch.name;
+    }
     refreshRepository();
 }
 
@@ -1024,9 +1030,26 @@ void MainWindow::refreshWorkingTree()
 
 void MainWindow::reloadBranches()
 {
+    if (!m_branchList) {
+        return;
+    }
+
+    m_syncingBranchList = true;
+
+    QItemSelectionModel *selection = m_branchList->selectionModel();
+    if (selection) {
+        selection->blockSignals(true);
+    }
+    m_branchList->blockSignals(true);
+
     m_branchList->clear();
     m_branches = m_git.branches(m_repo.path());
     if (m_branches.empty() && !m_git.lastError().isEmpty()) {
+        m_branchList->blockSignals(false);
+        if (selection) {
+            selection->blockSignals(false);
+        }
+        m_syncingBranchList = false;
         setStatusMessage(m_git.lastError());
         return;
     }
@@ -1045,16 +1068,33 @@ void MainWindow::reloadBranches()
         item->setData(Qt::UserRole, branch.name);
     }
 
-    if (m_branchList && !m_branchFilter.isEmpty()) {
-        const int row = rowForBranch(m_branchFilter);
-        if (row >= 0) {
-            m_branchList->blockSignals(true);
-            m_branchList->setCurrentRow(row);
-            m_branchList->blockSignals(false);
-        }
+    restoreBranchListSelection();
+
+    m_branchList->blockSignals(false);
+    if (selection) {
+        selection->blockSignals(false);
     }
+    m_syncingBranchList = false;
 
     updateBranchActions();
+}
+
+void MainWindow::restoreBranchListSelection()
+{
+    if (!m_branchList) {
+        return;
+    }
+
+    int row = -1;
+    if (!m_branchFilter.isEmpty()) {
+        row = rowForBranch(m_branchFilter);
+    }
+    if (row < 0) {
+        row = currentBranchRow();
+    }
+    if (row >= 0) {
+        m_branchList->setCurrentRow(row);
+    }
 }
 
 int MainWindow::rowForBranch(const QString &name) const
@@ -1088,9 +1128,20 @@ void MainWindow::selectBranchRow(int row, bool updateLog)
         return;
     }
 
+    m_syncingBranchList = true;
+
+    QItemSelectionModel *selection = m_branchList->selectionModel();
+    if (selection) {
+        selection->blockSignals(true);
+    }
     m_branchList->blockSignals(true);
     m_branchList->setCurrentRow(row);
     m_branchList->blockSignals(false);
+    if (selection) {
+        selection->blockSignals(false);
+    }
+    m_syncingBranchList = false;
+
     updateBranchActions();
 
     if (!updateLog || !m_repo.isValid()) {
@@ -1399,6 +1450,10 @@ void MainWindow::showCommitDetails(const QString &hash)
 
 void MainWindow::onBranchSelected(int row)
 {
+    if (m_syncingBranchList) {
+        return;
+    }
+
     updateBranchActions();
 
     if (!m_repo.isValid()) {
