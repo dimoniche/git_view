@@ -4,6 +4,7 @@
 #include "ui/DialogTitleBar.h"
 #include "ui/DiffViewerWidget.h"
 
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
@@ -172,8 +173,14 @@ void FileHistoryDialog::open(QWidget *parent, GitService *git, const QString &re
         return;
     }
 
-    auto *dialog = new FileHistoryDialog(git, repoPath, filePath, parent);
+    QWidget *dialogParent = parent && parent->isVisible() ? parent : nullptr;
+    auto *dialog = new FileHistoryDialog(git, repoPath, filePath, dialogParent);
     dialog->populateCommitList(commits);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    if (!dialogParent) {
+        QObject::connect(dialog, &QObject::destroyed, qApp, &QCoreApplication::quit);
+    }
     dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }

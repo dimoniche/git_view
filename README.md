@@ -54,6 +54,33 @@ Create a sample repository for manual testing:
 # File → Open repository → /tmp/git_view-fixture
 ```
 
+## Command line
+
+```bash
+git_view --help
+git_view /path/to/repo
+git_view --repo /path/to/repo --action working-changes
+git_view --action file-history --file src/main.cpp /path/to/repo
+git_view --action file-diff --diff-scope staged --file README.md /path/to/repo
+```
+
+Actions: `open`, `working-changes`, `file-history`, `file-diff`, `commit`, `log`.
+
+## File manager integration (Ubuntu / Nautilus)
+
+TortoiseGit-style context menu for git repositories:
+
+```bash
+chmod +x integrations/install-nautilus-integration.sh
+./integrations/install-nautilus-integration.sh /path/to/git_view
+nautilus -q
+```
+
+- **Scripts → GitView** — works without extra packages.
+- **Direct context menu items** — install `python3-nautilus`, then re-run the installer.
+
+Configuration: `~/.config/git_view/integration.conf` (`GIT_VIEW_BIN`).
+
 ## Features (current)
 
 - Open local repository, list branches (local and remote)

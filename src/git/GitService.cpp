@@ -2,6 +2,7 @@
 
 #include "git/DiffParser.h"
 #include "git/LogParser.h"
+#include "git/PathUtils.h"
 #include "git/StatusParser.h"
 
 #include <QDir>
@@ -12,6 +13,15 @@
 #include <QUrl>
 
 namespace {
+
+QString gitPathInRepo(const QString &repoPath, const QString &path)
+{
+    QString relative = PathUtils::toRepoRelativePath(repoPath, path);
+    if (relative.isEmpty()) {
+        relative = PathUtils::normalizeExternalPath(path);
+    }
+    return StatusParser::normalizeGitPath(relative);
+}
 
 QStringList pathsForDiff(const QString &statusPath)
 {
@@ -164,8 +174,18 @@ bool GitService::isRepository(const QString &path) const
 
 QString GitService::discoverGitDir(const QString &path) const
 {
+    QString gitCwd = PathUtils::normalizeExternalPath(path);
+    if (gitCwd.isEmpty()) {
+        return {};
+    }
+
+    const QFileInfo info(gitCwd);
+    if (info.exists() && info.isFile()) {
+        gitCwd = info.absolutePath();
+    }
+
     const GitProcessResult result =
-        m_runner.run(path, {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
+        m_runner.run(gitCwd, {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
     if (!result.success()) {
         setError(QStringLiteral("Not a git repository"), result);
         return {};
@@ -1411,7 +1431,7 @@ std::vector<WorkingTreeChange> GitService::workingTreeChanges(const QString &rep
 WorkingTreeChange GitService::changeForPath(const QString &repoPath, const QString &path) const
 {
     WorkingTreeChange change;
-    const QString normalizedPath = StatusParser::normalizeGitPath(path);
+    const QString normalizedPath = gitPathInRepo(repoPath, path);
     if (normalizedPath.isEmpty()) {
         return change;
     }
@@ -1550,7 +1570,7 @@ QString GitService::workingTreeFileDiff(const QString &repoPath,
     m_lastError.clear();
     m_lastDiffCommand.clear();
 
-    const QString normalizedPath = StatusParser::normalizeGitPath(path);
+    const QString normalizedPath = gitPathInRepo(repoPath, path);
     if (normalizedPath.isEmpty()) {
         return {};
     }
@@ -1603,13 +1623,14 @@ QString GitService::commitFileDiff(const QString &repoPath,
 {
     m_lastError.clear();
 
-    if (path.isEmpty()) {
+    const QString gitPath = gitPathInRepo(repoPath, path);
+    if (gitPath.isEmpty()) {
         return {};
     }
 
     const GitProcessResult result =
         m_runner.run(repoPath, {QStringLiteral("show"), QStringLiteral("--format="),
-                                QStringLiteral("--unified=3"), hash, QStringLiteral("--"), path});
+                                QStringLiteral("--unified=3"), hash, QStringLiteral("--"), gitPath});
     if (!result.success()) {
         setError(QStringLiteral("git show failed"), result);
         return {};
@@ -1626,7 +1647,8 @@ std::vector<Commit> GitService::logFileHistory(const QString &repoPath, const QS
 {
     m_lastError.clear();
 
-    if (path.isEmpty()) {
+    const QString gitPath = gitPathInRepo(repoPath, path);
+    if (gitPath.isEmpty()) {
         return {};
     }
 
@@ -1634,7 +1656,7 @@ std::vector<Commit> GitService::logFileHistory(const QString &repoPath, const QS
         repoPath,
         {QStringLiteral("log"), QStringLiteral("--follow"),
          QStringLiteral("--format=%H%x09%P%x09%an%x09%ad%x09%s"),
-         QStringLiteral("--date=iso-strict"), QStringLiteral("--"), path});
+         QStringLiteral("--date=iso-strict"), QStringLiteral("--"), gitPath});
     if (!result.success()) {
         setError(QStringLiteral("git log failed"), result);
         return {};

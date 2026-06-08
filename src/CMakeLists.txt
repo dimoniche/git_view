@@ -1,11 +1,13 @@
 set(GIT_VIEW_SOURCES
     main.cpp
+    AppLaunchOptions.cpp
     core/Commit.cpp
     core/Branch.cpp
     core/Repo.cpp
     core/GraphLayout.cpp
     core/CommitDetails.cpp
     core/WorkingTreeChange.cpp
+    git/PathUtils.cpp
     git/GitProcessRunner.cpp
     git/LogParser.cpp
     git/DiffParser.cpp

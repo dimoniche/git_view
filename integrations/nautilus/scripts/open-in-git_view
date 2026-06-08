@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "${HOME}/.local/share/git_view/run-git_view.sh" open

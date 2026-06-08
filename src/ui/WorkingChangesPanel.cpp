@@ -680,12 +680,30 @@ void WorkingChangesPanel::loadDiffForCurrentFile()
     showDiffText(diff, m_diffTitle->text());
 }
 
-void WorkingChangesPanel::openDiffInSeparateWindow()
+bool WorkingChangesPanel::selectFilePath(const QString &repoRelativePath)
 {
-    if (!m_git || m_repoPath.isEmpty()) {
-        return;
+    if (repoRelativePath.isEmpty()) {
+        return false;
     }
 
+    for (const WorkingDiffScope scope :
+         {WorkingDiffScope::Unstaged, WorkingDiffScope::Staged, WorkingDiffScope::AgainstHead}) {
+        selectTreeItem(repoRelativePath, scope);
+        if (selectedFileItem()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void WorkingChangesPanel::showFileDiffInWindow(const QString &repoRelativePath,
+                                               WorkingDiffScope scope)
+{
+    showFileDiffInWindowImpl(repoRelativePath, scope);
+}
+
+void WorkingChangesPanel::openDiffInSeparateWindow()
+{
     const QTreeWidgetItem *item = selectedFileItem();
     if (!item) {
         return;
@@ -696,8 +714,20 @@ void WorkingChangesPanel::openDiffInSeparateWindow()
         return;
     }
 
+    showFileDiffInWindowImpl(path, selectedItemScope());
+}
+
+void WorkingChangesPanel::showFileDiffInWindowImpl(const QString &repoRelativePath,
+                                                   WorkingDiffScope scope)
+{
+    if (!m_git || m_repoPath.isEmpty() || repoRelativePath.isEmpty()) {
+        return;
+    }
+
+    selectTreeItem(repoRelativePath, scope);
+
+    const QString path = repoRelativePath;
     const WorkingTreeChange change = changeForPath(path);
-    const WorkingDiffScope scope = selectedItemScope();
 
     QString sectionLabel;
     switch (scope) {
@@ -716,7 +746,7 @@ void WorkingChangesPanel::openDiffInSeparateWindow()
     const QString diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
 
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
-        DiffViewerDialog::showDiff(this, title, m_git->lastError());
+        DiffViewerDialog::showDiff(nullptr, title, m_git->lastError());
         return;
     }
 
@@ -762,12 +792,12 @@ void WorkingChangesPanel::openDiffInSeparateWindow()
         if (!m_git->lastError().isEmpty()) {
             hint += QLatin1Char('\n') + m_git->lastError();
         }
-        DiffViewerDialog::showDiff(this, title, hint);
+        DiffViewerDialog::showDiff(nullptr, title, hint);
         return;
     }
 
     const DiffViewerSources sources = buildSourcesForFile(path, scope, change);
-    DiffViewerDialog::showDiff(this, title, diff, sources, path);
+    DiffViewerDialog::showDiff(nullptr, title, diff, sources, path);
 }
 
 DiffViewerSources WorkingChangesPanel::buildSourcesForFile(const QString &path,

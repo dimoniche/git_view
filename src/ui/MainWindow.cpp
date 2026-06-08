@@ -2,6 +2,7 @@
 
 #include "core/WorkingTreeChange.h"
 #include "ui/CommitDetailsPanel.h"
+#include "ui/FileHistoryDialog.h"
 #include "ui/CommitHistoryView.h"
 #include "ui/RemotesDialog.h"
 #include "ui/WorkingChangesPanel.h"
@@ -657,6 +658,72 @@ void MainWindow::refreshRepository()
     reloadBranches();
     reloadLog(m_branchFilter);
     refreshWorkingTree();
+}
+
+bool MainWindow::openRepositoryAt(const QString &path)
+{
+    if (path.trimmed().isEmpty()) {
+        return false;
+    }
+
+    const QString topLevel = m_git.discoverGitDir(path);
+    if (topLevel.isEmpty()) {
+        QMessageBox::warning(this, tr("Open repository"),
+                             tr("Could not open repository:\n%1").arg(m_git.lastError()));
+        return false;
+    }
+
+    setRepository(path);
+    return m_repo.isValid();
+}
+
+void MainWindow::applyLaunchOptions(const AppLaunchOptions &options)
+{
+    if (!options.valid || options.showHelp) {
+        return;
+    }
+
+    if (!options.repoPath.isEmpty()) {
+        openRepositoryAt(options.repoPath);
+    }
+
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    switch (options.action) {
+    case LaunchAction::Open:
+        if (!options.filePaths.isEmpty()) {
+            showWorkingTreeTab();
+            m_workingPanel->selectFilePath(options.filePaths.first());
+        }
+        break;
+    case LaunchAction::WorkingChanges:
+        showWorkingTreeTab();
+        if (!options.filePaths.isEmpty()) {
+            m_workingPanel->selectFilePath(options.filePaths.first());
+        }
+        break;
+    case LaunchAction::Commit:
+        showWorkingTreeTab();
+        break;
+    case LaunchAction::Log:
+        focusHistoryPanel();
+        break;
+    case LaunchAction::FileHistory:
+        if (!options.filePaths.isEmpty()) {
+            FileHistoryDialog::open(nullptr, &m_git, m_repo.path(), options.filePaths.first());
+            hide();
+        }
+        break;
+    case LaunchAction::FileDiff:
+        if (!options.filePaths.isEmpty()) {
+            refreshWorkingTree();
+            m_workingPanel->showFileDiffInWindow(options.filePaths.first(), options.diffScope);
+            hide();
+        }
+        break;
+    }
 }
 
 void MainWindow::setRepository(const QString &path)

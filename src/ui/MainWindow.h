@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AppLaunchOptions.h"
 #include "core/Branch.h"
 #include "core/Repo.h"
 
@@ -28,6 +29,9 @@ class MainWindow : public QMainWindow {
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+
+    bool openRepositoryAt(const QString &path);
+    void applyLaunchOptions(const AppLaunchOptions &options);
 
 protected:
     void closeEvent(QCloseEvent *event) override;

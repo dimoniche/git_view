@@ -22,6 +22,9 @@ public:
     void setRepoContext(const QString &repoPath, GitService *git);
     void refresh();
     void setCommitEnabled(bool enabled);
+    bool selectFilePath(const QString &repoRelativePath);
+    void showFileDiffInWindow(const QString &repoRelativePath,
+                              WorkingDiffScope scope = WorkingDiffScope::Unstaged);
     QString selectedFilePath() const;
     QStringList selectedFilePaths() const;
     bool hasSelectedChange() const;
@@ -46,6 +49,7 @@ private slots:
 private:
     void loadDiffForCurrentFile();
     void openDiffInSeparateWindow();
+    void showFileDiffInWindowImpl(const QString &repoRelativePath, WorkingDiffScope scope);
     DiffViewerSources buildSourcesForFile(const QString &path, WorkingDiffScope scope,
                                           const WorkingTreeChange &change) const;
     void showDiffText(const QString &text, const QString &title);

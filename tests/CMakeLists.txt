@@ -49,6 +49,7 @@ add_test(NAME test_diff_parser COMMAND test_diff_parser)
 
 add_executable(test_git_staged_diff test_git_staged_diff.cpp
     ${CMAKE_SOURCE_DIR}/src/git/GitService.cpp
+    ${CMAKE_SOURCE_DIR}/src/git/PathUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/git/GitProcessRunner.cpp
     ${CMAKE_SOURCE_DIR}/src/git/LogParser.cpp
     ${CMAKE_SOURCE_DIR}/src/git/DiffParser.cpp
@@ -66,6 +67,7 @@ add_test(NAME test_git_staged_diff COMMAND test_git_staged_diff)
 
 add_executable(test_live_staged test_live_staged.cpp
     ${CMAKE_SOURCE_DIR}/src/git/GitService.cpp
+    ${CMAKE_SOURCE_DIR}/src/git/PathUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/git/GitProcessRunner.cpp
     ${CMAKE_SOURCE_DIR}/src/git/LogParser.cpp
     ${CMAKE_SOURCE_DIR}/src/git/DiffParser.cpp
