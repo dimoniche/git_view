@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include <QWidget>
 #include <QString>
 
 struct DiffViewerSources {
@@ -10,7 +10,7 @@ struct DiffViewerSources {
     QString afterCaption;
 };
 
-class DiffViewerDialog : public QDialog {
+class DiffViewerDialog : public QWidget {
     Q_OBJECT
 
 public:
