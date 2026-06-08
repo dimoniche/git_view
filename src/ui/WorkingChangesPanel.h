@@ -23,12 +23,13 @@ public:
     void refresh();
     void setCommitEnabled(bool enabled);
     QString selectedFilePath() const;
+    QStringList selectedFilePaths() const;
     bool hasSelectedChange() const;
 
 signals:
     void commitRequested();
     void discardAllRequested();
-    void discardFileRequested(const QString &path);
+    void discardFilesRequested(const QStringList &paths);
     void addToGitignoreRequested(const QString &path);
     void fileSelectionChanged();
 
@@ -52,6 +53,7 @@ private:
     bool isStagedEntry(const WorkingTreeChange &change) const;
     WorkingDiffScope selectedItemScope() const;
     const QTreeWidgetItem *selectedFileItem() const;
+    QList<const QTreeWidgetItem *> selectedFileItems() const;
 
     QString m_repoPath;
     GitService *m_git = nullptr;

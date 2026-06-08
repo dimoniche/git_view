@@ -4,6 +4,7 @@
 #include "git/GitService.h"
 #include "ui/DiffViewerDialog.h"
 
+#include <QAbstractItemView>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QMenu>
@@ -131,8 +132,11 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
     m_filesTree->setMinimumHeight(80);
     m_filesTree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_filesTree->setUniformRowHeights(true);
+    m_filesTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     connect(m_filesTree, &QTreeWidget::currentItemChanged, this,
             &WorkingChangesPanel::onFileSelectionChanged);
+    connect(m_filesTree, &QTreeWidget::itemSelectionChanged, this,
+            &WorkingChangesPanel::updateDiscardFileButton);
     connect(m_filesTree, &QTreeWidget::itemDoubleClicked, this,
             &WorkingChangesPanel::onFileDoubleClicked);
     connect(m_filesTree, &QWidget::customContextMenuRequested, this,
@@ -213,6 +217,21 @@ const QTreeWidgetItem *WorkingChangesPanel::selectedFileItem() const
     return item;
 }
 
+QList<const QTreeWidgetItem *> WorkingChangesPanel::selectedFileItems() const
+{
+    QList<const QTreeWidgetItem *> items;
+    if (!m_filesTree) {
+        return items;
+    }
+
+    for (QTreeWidgetItem *item : m_filesTree->selectedItems()) {
+        if (item && item->data(0, KindRole).toInt() == static_cast<int>(TreeItemKind::File)) {
+            items.append(item);
+        }
+    }
+    return items;
+}
+
 WorkingDiffScope WorkingChangesPanel::selectedItemScope() const
 {
     const QTreeWidgetItem *item = selectedFileItem();
@@ -228,17 +247,23 @@ void WorkingChangesPanel::updateDiscardFileButton()
         return;
     }
     const bool hasRepo = m_git && !m_repoPath.isEmpty();
-    const bool hasFile = hasRepo && selectedFileItem() != nullptr;
-    m_discardFileButton->setEnabled(hasFile && m_discardAllButton && m_discardAllButton->isEnabled());
+    const QStringList paths = selectedFilePaths();
+    const bool hasFiles = hasRepo && !paths.isEmpty();
+    m_discardFileButton->setEnabled(hasFiles && m_discardAllButton && m_discardAllButton->isEnabled());
+    if (paths.size() > 1) {
+        m_discardFileButton->setText(tr("Discard %1 files…").arg(paths.size()));
+    } else {
+        m_discardFileButton->setText(tr("Discard file…"));
+    }
 }
 
 void WorkingChangesPanel::onDiscardFileClicked()
 {
-    const QString path = selectedFilePath();
-    if (path.isEmpty()) {
+    const QStringList paths = selectedFilePaths();
+    if (paths.isEmpty()) {
         return;
     }
-    emit discardFileRequested(path);
+    emit discardFilesRequested(paths);
 }
 
 void WorkingChangesPanel::onDiscardAllClicked()
@@ -255,9 +280,21 @@ QString WorkingChangesPanel::selectedFilePath() const
     return item->data(0, PathRole).toString();
 }
 
+QStringList WorkingChangesPanel::selectedFilePaths() const
+{
+    QStringList paths;
+    for (const QTreeWidgetItem *item : selectedFileItems()) {
+        const QString path = item->data(0, PathRole).toString();
+        if (!path.isEmpty() && !paths.contains(path)) {
+            paths.append(path);
+        }
+    }
+    return paths;
+}
+
 bool WorkingChangesPanel::hasSelectedChange() const
 {
-    return selectedFileItem() != nullptr;
+    return !selectedFilePaths().isEmpty();
 }
 
 void WorkingChangesPanel::selectTreeItem(const QString &path, WorkingDiffScope scope)
@@ -294,12 +331,21 @@ void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
         item && item->data(0, KindRole).toInt() == static_cast<int>(TreeItemKind::File);
 
     if (isFile) {
+        if (!item->isSelected()) {
+            m_filesTree->clearSelection();
+            item->setSelected(true);
+        }
         m_filesTree->setCurrentItem(item);
+
+        const QStringList selectedPaths = selectedFilePaths();
         const QString path = item->data(0, PathRole).toString();
         const WorkingTreeChange change = changeForPath(path);
 
-        QAction *discardFileAction =
-            menu.addAction(tr("Discard file changes…"), this, &WorkingChangesPanel::onDiscardFileClicked);
+        QAction *discardFileAction = menu.addAction(
+            selectedPaths.size() > 1
+                ? tr("Discard changes to %1 files…").arg(selectedPaths.size())
+                : tr("Discard file changes…"),
+            this, &WorkingChangesPanel::onDiscardFileClicked);
         discardFileAction->setEnabled(m_discardFileButton && m_discardFileButton->isEnabled());
 
         const bool inStaged = isStagedEntry(change);

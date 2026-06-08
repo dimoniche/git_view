@@ -50,7 +50,7 @@ private slots:
     void focusHistoryPanel();
     void commitChanges();
     void discardAllChanges();
-    void discardFileChanges(const QString &path);
+    void discardFileChanges(const QStringList &paths);
     void addPathToGitignore(const QString &path);
     void checkoutBranch(const Branch &branch);
     void checkoutSelectedBranch();

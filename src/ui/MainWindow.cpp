@@ -143,7 +143,7 @@ void MainWindow::setupUi()
     connect(m_discardFileAction, &QAction::triggered, this, [this]() {
         showWorkingTreeTab();
         if (m_workingPanel && m_workingPanel->hasSelectedChange()) {
-            discardFileChanges(m_workingPanel->selectedFilePath());
+            discardFileChanges(m_workingPanel->selectedFilePaths());
         }
     });
 
@@ -281,7 +281,7 @@ void MainWindow::setupUi()
     m_workingPanel = new WorkingChangesPanel(m_detailsPanelContainer);
     connect(m_workingPanel, &WorkingChangesPanel::commitRequested, this, &MainWindow::commitChanges);
     connect(m_workingPanel, &WorkingChangesPanel::discardAllRequested, this, &MainWindow::discardAllChanges);
-    connect(m_workingPanel, &WorkingChangesPanel::discardFileRequested, this,
+    connect(m_workingPanel, &WorkingChangesPanel::discardFilesRequested, this,
             &MainWindow::discardFileChanges);
     connect(m_workingPanel, &WorkingChangesPanel::addToGitignoreRequested, this,
             &MainWindow::addPathToGitignore);
@@ -886,38 +886,59 @@ void MainWindow::discardAllChanges()
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
-void MainWindow::discardFileChanges(const QString &path)
+void MainWindow::discardFileChanges(const QStringList &paths)
 {
     if (!m_repo.isValid()) {
         QMessageBox::information(this, tr("Discard changes"), tr("Open a repository first."));
         return;
     }
 
-    if (path.isEmpty()) {
-        QMessageBox::information(this, tr("Discard changes"), tr("Select a file in the list first."));
+    QStringList uniquePaths;
+    for (const QString &path : paths) {
+        if (!path.isEmpty() && !uniquePaths.contains(path)) {
+            uniquePaths.append(path);
+        }
+    }
+
+    if (uniquePaths.isEmpty()) {
+        QMessageBox::information(this, tr("Discard changes"), tr("Select files in the list first."));
         return;
     }
 
     const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
-    if (conflicts.contains(path)) {
+    QStringList conflictedPaths;
+    for (const QString &path : uniquePaths) {
+        if (conflicts.contains(path)) {
+            conflictedPaths.append(path);
+        }
+    }
+    if (!conflictedPaths.isEmpty()) {
         QMessageBox::critical(
             this, tr("Discard changes"),
-            tr("Cannot discard \"%1\" while it has merge conflicts.").arg(path));
+            tr("Cannot discard files with merge conflicts:\n%1").arg(conflictedPaths.join(QLatin1Char('\n'))));
         return;
     }
 
-    WorkingTreeChange change;
-    bool found = false;
-    for (const WorkingTreeChange &candidate : m_git.workingTreeChanges(m_repo.path())) {
-        if (candidate.path == path) {
-            change = candidate;
-            found = true;
-            break;
+    const std::vector<WorkingTreeChange> allChanges = m_git.workingTreeChanges(m_repo.path());
+    std::vector<WorkingTreeChange> changesToDiscard;
+    QStringList missingPaths;
+    for (const QString &path : uniquePaths) {
+        bool found = false;
+        for (const WorkingTreeChange &candidate : allChanges) {
+            if (candidate.path == path) {
+                changesToDiscard.push_back(candidate);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            missingPaths.append(path);
         }
     }
-    if (!found) {
+
+    if (changesToDiscard.empty()) {
         QMessageBox::information(this, tr("Discard changes"),
-                                 tr("File \"%1\" has no pending changes.").arg(path));
+                               tr("Selected files have no pending changes."));
         QTimer::singleShot(0, this, &MainWindow::refreshRepository);
         return;
     }
@@ -925,12 +946,25 @@ void MainWindow::discardFileChanges(const QString &path)
     showWorkingTreeTab();
 
     QString actionText;
-    if (change.isUntracked()) {
-        actionText = tr("Delete untracked path \"%1\"?").arg(path);
+    if (changesToDiscard.size() == 1) {
+        const WorkingTreeChange &change = changesToDiscard.front();
+        const QString &path = change.path;
+        if (change.isUntracked()) {
+            actionText = tr("Delete untracked path \"%1\"?").arg(path);
+        } else {
+            actionText =
+                tr("Discard all changes to \"%1\" (staged and unstaged) and restore the last committed version?")
+                    .arg(path);
+        }
     } else {
+        QStringList listedPaths;
+        for (const WorkingTreeChange &change : changesToDiscard) {
+            listedPaths.append(change.path);
+        }
         actionText =
-            tr("Discard all changes to \"%1\" (staged and unstaged) and restore the last committed version?")
-                .arg(path);
+            tr("Discard all changes to %1 selected files (staged and unstaged) and restore the last committed versions?")
+                .arg(changesToDiscard.size());
+        actionText += QStringLiteral("\n\n") + listedPaths.join(QLatin1Char('\n'));
     }
 
     const auto answer =
@@ -940,16 +974,36 @@ void MainWindow::discardFileChanges(const QString &path)
         return;
     }
 
-    const GitProcessResult result = m_git.discardFileChanges(m_repo.path(), change);
-    if (!result.success()) {
+    QStringList failedPaths;
+    QString lastError;
+    QString lastStderr;
+    for (const WorkingTreeChange &change : changesToDiscard) {
+        const GitProcessResult result = m_git.discardFileChanges(m_repo.path(), change);
+        if (!result.success()) {
+            failedPaths.append(change.path);
+            lastError = m_git.lastError();
+            lastStderr = result.stderrText.trimmed();
+        }
+    }
+
+    if (!failedPaths.isEmpty()) {
         QMessageBox::critical(
             this, tr("Discard failed"),
-            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+            tr("Failed to discard changes to:\n%1\n\n%2\n\n%3")
+                .arg(failedPaths.join(QLatin1Char('\n')), lastError, lastStderr));
+        QTimer::singleShot(0, this, &MainWindow::refreshRepository);
         return;
     }
 
-    QMessageBox::information(this, tr("Discard changes"),
-                             tr("Changes to \"%1\" were discarded.").arg(path));
+    if (changesToDiscard.size() == 1) {
+        QMessageBox::information(this, tr("Discard changes"),
+                                 tr("Changes to \"%1\" were discarded.")
+                                     .arg(changesToDiscard.front().path));
+    } else {
+        QMessageBox::information(
+            this, tr("Discard changes"),
+            tr("Changes to %1 files were discarded.").arg(changesToDiscard.size()));
+    }
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
