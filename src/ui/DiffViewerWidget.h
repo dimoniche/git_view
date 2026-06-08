@@ -8,6 +8,7 @@
 
 class QPoint;
 
+class QObject;
 class QLabel;
 class QPlainTextEdit;
 class QSplitter;
@@ -60,4 +61,6 @@ private:
     QString m_rawBefore;
     QString m_rawAfter;
     bool m_syncingSourceNavigation = false;
+    QObject *m_pendingClickViewport = nullptr;
+    QPoint m_pendingClickPos;
 };

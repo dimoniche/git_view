@@ -4,10 +4,12 @@
 #include "ui/SourceChangeHighlighter.h"
 #include "ui/SourceCodeView.h"
 
+#include <QApplication>
 #include <QColor>
 #include <QFont>
 #include <QFontMetrics>
 #include <QLabel>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPoint>
@@ -106,13 +108,27 @@ bool DiffViewerWidget::eventFilter(QObject *watched, QEvent *event)
 {
     if (event->type() == QEvent::MouseButtonPress) {
         const auto *mouseEvent = static_cast<QMouseEvent *>(event);
-        if (mouseEvent->button() == Qt::LeftButton) {
-            if (watched == m_diffView->viewport()) {
-                handleDiffClick(mouseEvent->pos());
-            } else if (watched == m_beforeView->viewport()) {
-                handleSourceClick(m_beforeView, mouseEvent->pos());
-            } else if (watched == m_afterView->viewport()) {
-                handleSourceClick(m_afterView, mouseEvent->pos());
+        if (mouseEvent->button() == Qt::LeftButton
+            && (watched == m_diffView->viewport() || watched == m_beforeView->viewport()
+                || watched == m_afterView->viewport())) {
+            m_pendingClickViewport = watched;
+            m_pendingClickPos = mouseEvent->pos();
+        }
+    } else if (event->type() == QEvent::MouseButtonRelease) {
+        const auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton && watched == m_pendingClickViewport) {
+            m_pendingClickViewport = nullptr;
+            const int dragDistance = (mouseEvent->pos() - m_pendingClickPos).manhattanLength();
+            if (dragDistance <= QApplication::startDragDistance()) {
+                if (watched == m_diffView->viewport() && !m_diffView->textCursor().hasSelection()) {
+                    handleDiffClick(mouseEvent->pos());
+                } else if (watched == m_beforeView->viewport()
+                           && !m_beforeView->textCursor().hasSelection()) {
+                    handleSourceClick(m_beforeView, mouseEvent->pos());
+                } else if (watched == m_afterView->viewport()
+                           && !m_afterView->textCursor().hasSelection()) {
+                    handleSourceClick(m_afterView, mouseEvent->pos());
+                }
             }
         }
     }
@@ -154,9 +170,18 @@ void DiffViewerWidget::configureEditor(QPlainTextEdit *editor)
 {
     editor->setReadOnly(true);
     editor->setLineWrapMode(QPlainTextEdit::NoWrap);
+    editor->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     editor->setFont(diffMonospaceFont(editor->font()));
     editor->setTabStopDistance(
         QFontMetrics(editor->font()).horizontalAdvance(QLatin1Char(' ')) * 4);
+    editor->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(editor, &QWidget::customContextMenuRequested, editor,
+            [editor](const QPoint &pos) {
+                if (QMenu *menu = editor->createStandardContextMenu()) {
+                    menu->exec(editor->mapToGlobal(pos));
+                    delete menu;
+                }
+            });
 }
 
 void DiffViewerWidget::setDiff(const QString &diff)
@@ -244,7 +269,8 @@ int DiffViewerWidget::displayRowForAfterSourceLine(int sourceLine) const
 
 void DiffViewerWidget::onDiffCursorChanged()
 {
-    if (m_lineMap.isEmpty() || !m_sourceSplitter->isVisible()) {
+    if (m_lineMap.isEmpty() || !m_sourceSplitter->isVisible()
+        || m_diffView->textCursor().hasSelection()) {
         return;
     }
 
@@ -291,7 +317,7 @@ void DiffViewerWidget::onSourceCursorChanged()
     }
 
     auto *source = qobject_cast<SourceCodeView *>(sender());
-    if (!source) {
+    if (!source || source->textCursor().hasSelection()) {
         return;
     }
 
