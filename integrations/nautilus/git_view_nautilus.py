@@ -140,6 +140,10 @@ class GitViewExtension(GObject.GObject, Nautilus.MenuProvider):
             ),
             self._menu_item("GitView::commit", "Commit…", "commit", repo),
             self._menu_item("GitView::log", "Show log", "log", repo),
+            separator("GitView::sep_remote"),
+            self._menu_item("GitView::fetch", "Fetch…", "fetch", repo),
+            self._menu_item("GitView::pull", "Pull…", "pull", repo),
+            self._menu_item("GitView::push", "Push…", "push", repo),
         ]
 
         history_paths = selected_files + selected_dirs

@@ -723,6 +723,15 @@ void MainWindow::applyLaunchOptions(const AppLaunchOptions &options)
             hide();
         }
         break;
+    case LaunchAction::Fetch:
+        fetchRemotes();
+        break;
+    case LaunchAction::Pull:
+        pullCurrentBranch();
+        break;
+    case LaunchAction::Push:
+        publishOrPushSelectedBranch();
+        break;
     }
 }
 

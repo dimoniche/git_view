@@ -143,6 +143,9 @@ QString AppLaunchOptions::helpText()
         "  file-diff         Show diff for the selected file(s)\n"
         "  commit            Open working tree tab to commit changes\n"
         "  log               Focus commit history\n"
+        "  fetch             Fetch from remote(s)\n"
+        "  pull              Pull current branch\n"
+        "  push              Push or publish current branch\n"
         "\n"
         "Examples:\n"
         "  git_view /path/to/repo\n"
@@ -192,6 +195,24 @@ LaunchAction AppLaunchOptions::actionFromString(const QString &value, bool *ok)
         }
         return LaunchAction::Log;
     }
+    if (normalized == QLatin1String("fetch")) {
+        if (ok) {
+            *ok = true;
+        }
+        return LaunchAction::Fetch;
+    }
+    if (normalized == QLatin1String("pull")) {
+        if (ok) {
+            *ok = true;
+        }
+        return LaunchAction::Pull;
+    }
+    if (normalized == QLatin1String("push")) {
+        if (ok) {
+            *ok = true;
+        }
+        return LaunchAction::Push;
+    }
     if (ok) {
         *ok = false;
     }
@@ -213,6 +234,12 @@ QString AppLaunchOptions::actionToString(LaunchAction action)
         return QStringLiteral("commit");
     case LaunchAction::Log:
         return QStringLiteral("log");
+    case LaunchAction::Fetch:
+        return QStringLiteral("fetch");
+    case LaunchAction::Pull:
+        return QStringLiteral("pull");
+    case LaunchAction::Push:
+        return QStringLiteral("push");
     }
     return QStringLiteral("open");
 }

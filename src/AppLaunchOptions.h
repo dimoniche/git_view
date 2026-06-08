@@ -12,6 +12,9 @@ enum class LaunchAction {
     FileDiff,
     Commit,
     Log,
+    Fetch,
+    Pull,
+    Push,
 };
 
 struct AppLaunchOptions {
