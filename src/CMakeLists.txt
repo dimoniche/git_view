@@ -21,7 +21,9 @@ set(GIT_VIEW_SOURCES
     ui/PtySession.cpp
     ui/VtermTerminalWidget.cpp
     ui/DiffHighlighter.cpp
+    ui/DialogTitleBar.cpp
     ui/DiffViewerDialog.cpp
+    ui/FileHistoryDialog.cpp
     ui/DiffViewerWidget.cpp
     ui/SourceChangeHighlighter.cpp
     ui/SourceCodeView.cpp

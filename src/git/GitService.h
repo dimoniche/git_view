@@ -132,6 +132,7 @@ public:
     QString commitFileDiff(const QString &repoPath,
                            const QString &hash,
                            const QString &path) const;
+    std::vector<Commit> logFileHistory(const QString &repoPath, const QString &path) const;
 
     std::vector<WorkingTreeChange> workingTreeChanges(const QString &repoPath) const;
     WorkingTreeChange changeForPath(const QString &repoPath, const QString &path) const;

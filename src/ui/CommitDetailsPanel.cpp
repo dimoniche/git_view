@@ -3,6 +3,7 @@
 #include "git/GitService.h"
 #include "ui/DiffHighlighter.h"
 #include "ui/DiffViewerDialog.h"
+#include "ui/FileHistoryDialog.h"
 
 #include <QFont>
 #include <QFontMetrics>
@@ -179,6 +180,9 @@ void CommitDetailsPanel::showFilesContextMenu(const QPoint &pos)
     m_filesList->setCurrentRow(m_filesList->row(item));
 
     QMenu menu(this);
+    menu.addAction(tr("Show full file history…"), this,
+                   [this, path]() { openFileHistoryInSeparateWindow(path); });
+    menu.addSeparator();
     menu.addAction(tr("Copy path"), this, [path]() {
         if (QClipboard *clipboard = QGuiApplication::clipboard()) {
             clipboard->setText(path);
@@ -275,6 +279,11 @@ void CommitDetailsPanel::openDiffInSeparateWindow()
     }
 
     DiffViewerDialog::showDiff(this, title, diff, buildSourcesForFile(path));
+}
+
+void CommitDetailsPanel::openFileHistoryInSeparateWindow(const QString &path)
+{
+    FileHistoryDialog::open(this, m_git, m_repoPath, path);
 }
 
 void CommitDetailsPanel::showDiffText(const QString &text, const QString &title)

@@ -31,6 +31,7 @@ private slots:
 private:
     void loadDiffForCurrentFile();
     void openDiffInSeparateWindow();
+    void openFileHistoryInSeparateWindow(const QString &path);
     DiffViewerSources buildSourcesForFile(const QString &path) const;
     void showDiffText(const QString &text, const QString &title);
 

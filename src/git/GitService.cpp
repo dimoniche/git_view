@@ -1622,6 +1622,27 @@ QString GitService::commitFileDiff(const QString &repoPath,
     return diff;
 }
 
+std::vector<Commit> GitService::logFileHistory(const QString &repoPath, const QString &path) const
+{
+    m_lastError.clear();
+
+    if (path.isEmpty()) {
+        return {};
+    }
+
+    const GitProcessResult result = m_runner.run(
+        repoPath,
+        {QStringLiteral("log"), QStringLiteral("--follow"),
+         QStringLiteral("--format=%H%x09%P%x09%an%x09%ad%x09%s"),
+         QStringLiteral("--date=iso-strict"), QStringLiteral("--"), path});
+    if (!result.success()) {
+        setError(QStringLiteral("git log failed"), result);
+        return {};
+    }
+
+    return LogParser::parseLogOutput(result.stdoutText);
+}
+
 WorkingFileContent GitService::workingTreeFileContent(const QString &repoPath,
                                                       const QString &path,
                                                       WorkingDiffScope scope,
