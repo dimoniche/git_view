@@ -2,6 +2,7 @@
 
 #include "core/WorkingTreeChange.h"
 #include "ui/CommitDetailsPanel.h"
+#include "ui/CommitDetailsDialog.h"
 #include "ui/FileHistoryDialog.h"
 #include "ui/CommitHistoryView.h"
 #include "ui/RemotesDialog.h"
@@ -1868,10 +1869,10 @@ void MainWindow::onCommitSelected(const QString &hash)
 
 void MainWindow::focusCommitDetails(const QString &hash)
 {
-    showCommitDetails(hash);
-    if (m_detailsTabs && m_detailsPanel) {
-        m_detailsTabs->setCurrentWidget(m_detailsPanel);
+    if (!m_repo.isValid() || hash.isEmpty()) {
+        return;
     }
+    CommitDetailsDialog::open(this, &m_git, m_repo.path(), hash);
 }
 
 void MainWindow::showCommitDetails(const QString &hash)

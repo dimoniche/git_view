@@ -17,6 +17,7 @@ set(GIT_VIEW_SOURCES
     ui/CommitGraphWidget.cpp
     ui/CommitHistoryView.cpp
     ui/CommitDetailsPanel.cpp
+    ui/CommitDetailsDialog.cpp
     ui/WorkingChangesPanel.cpp
     ui/RemotesDialog.cpp
     ui/RepoTerminalPanel.cpp
