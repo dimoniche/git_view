@@ -189,11 +189,17 @@ void WorkingChangesPanel::setRepoContext(const QString &repoPath, GitService *gi
 void WorkingChangesPanel::setCommitEnabled(bool enabled)
 {
     m_repoActionsEnabled = enabled;
-    if (m_commitButton) {
-        m_commitButton->setEnabled(enabled);
-    }
+    updateCommitButton();
     updateDiscardAllButton();
     updateDiscardFileButton();
+}
+
+void WorkingChangesPanel::updateCommitButton()
+{
+    if (!m_commitButton) {
+        return;
+    }
+    m_commitButton->setEnabled(m_repoActionsEnabled && !m_allChanges.empty());
 }
 
 void WorkingChangesPanel::updateDiscardAllButton()
@@ -413,6 +419,7 @@ void WorkingChangesPanel::refresh()
     if (!m_git || m_repoPath.isEmpty()) {
         m_summaryLabel->setText(tr("Open a repository"));
         showDiffText({}, tr("Diff"));
+        updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
         return;
@@ -422,6 +429,7 @@ void WorkingChangesPanel::refresh()
     if (m_allChanges.empty() && !m_git->lastError().isEmpty()) {
         m_summaryLabel->setText(m_git->lastError());
         showDiffText({}, tr("Diff"));
+        updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
         return;
@@ -433,6 +441,7 @@ void WorkingChangesPanel::refresh()
         empty->setText(0, tr("(no changes)"));
         empty->setFlags(Qt::NoItemFlags);
         showDiffText({}, tr("Diff"));
+        updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
         return;
@@ -515,6 +524,7 @@ void WorkingChangesPanel::rebuildChangeTree()
         empty->setFlags(Qt::NoItemFlags);
         m_summaryLabel->setText(tr("Working tree clean"));
         showDiffText({}, tr("Diff"));
+        updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
         return;
@@ -559,6 +569,7 @@ void WorkingChangesPanel::rebuildChangeTree()
         m_filesTree->setCurrentItem(selectItem);
     }
 
+    updateCommitButton();
     updateDiscardAllButton();
     updateDiscardFileButton();
 

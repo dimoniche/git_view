@@ -38,6 +38,7 @@ private slots:
     void onFileDoubleClicked(QTreeWidgetItem *item, int column);
     void onDiscardFileClicked();
     void onDiscardAllClicked();
+    void updateCommitButton();
     void updateDiscardAllButton();
     void updateDiscardFileButton();
     void showFilesContextMenu(const QPoint &pos);

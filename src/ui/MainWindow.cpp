@@ -1061,6 +1061,9 @@ void MainWindow::updateWorkingTreeActions()
     }
     const bool repoOpen = m_repo.isValid();
     const bool dirty = repoOpen && m_git.hasUncommittedChanges(m_repo.path());
+    if (m_commitAction) {
+        m_commitAction->setEnabled(repoOpen && dirty);
+    }
     if (m_discardAllAction) {
         m_discardAllAction->setEnabled(repoOpen && dirty);
     }
