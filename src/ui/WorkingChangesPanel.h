@@ -38,6 +38,7 @@ private slots:
     void onFileDoubleClicked(QTreeWidgetItem *item, int column);
     void onDiscardFileClicked();
     void onDiscardAllClicked();
+    void updateDiscardAllButton();
     void updateDiscardFileButton();
     void showFilesContextMenu(const QPoint &pos);
 
@@ -66,4 +67,5 @@ private:
     QTreeWidget *m_filesTree = nullptr;
     QLabel *m_diffTitle = nullptr;
     QPlainTextEdit *m_diffView = nullptr;
+    bool m_repoActionsEnabled = false;
 };

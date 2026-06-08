@@ -188,13 +188,20 @@ void WorkingChangesPanel::setRepoContext(const QString &repoPath, GitService *gi
 
 void WorkingChangesPanel::setCommitEnabled(bool enabled)
 {
+    m_repoActionsEnabled = enabled;
     if (m_commitButton) {
         m_commitButton->setEnabled(enabled);
     }
-    if (m_discardAllButton) {
-        m_discardAllButton->setEnabled(enabled);
-    }
+    updateDiscardAllButton();
     updateDiscardFileButton();
+}
+
+void WorkingChangesPanel::updateDiscardAllButton()
+{
+    if (!m_discardAllButton) {
+        return;
+    }
+    m_discardAllButton->setEnabled(m_repoActionsEnabled && !m_allChanges.empty());
 }
 
 bool WorkingChangesPanel::isStagedEntry(const WorkingTreeChange &change) const
@@ -246,10 +253,9 @@ void WorkingChangesPanel::updateDiscardFileButton()
     if (!m_discardFileButton) {
         return;
     }
-    const bool hasRepo = m_git && !m_repoPath.isEmpty();
     const QStringList paths = selectedFilePaths();
-    const bool hasFiles = hasRepo && !paths.isEmpty();
-    m_discardFileButton->setEnabled(hasFiles && m_discardAllButton && m_discardAllButton->isEnabled());
+    const bool hasFiles = !paths.isEmpty();
+    m_discardFileButton->setEnabled(m_repoActionsEnabled && !m_allChanges.empty() && hasFiles);
     if (paths.size() > 1) {
         m_discardFileButton->setText(tr("Discard %1 files…").arg(paths.size()));
     } else {
@@ -407,6 +413,7 @@ void WorkingChangesPanel::refresh()
     if (!m_git || m_repoPath.isEmpty()) {
         m_summaryLabel->setText(tr("Open a repository"));
         showDiffText({}, tr("Diff"));
+        updateDiscardAllButton();
         updateDiscardFileButton();
         return;
     }
@@ -415,6 +422,8 @@ void WorkingChangesPanel::refresh()
     if (m_allChanges.empty() && !m_git->lastError().isEmpty()) {
         m_summaryLabel->setText(m_git->lastError());
         showDiffText({}, tr("Diff"));
+        updateDiscardAllButton();
+        updateDiscardFileButton();
         return;
     }
 
@@ -424,6 +433,7 @@ void WorkingChangesPanel::refresh()
         empty->setText(0, tr("(no changes)"));
         empty->setFlags(Qt::NoItemFlags);
         showDiffText({}, tr("Diff"));
+        updateDiscardAllButton();
         updateDiscardFileButton();
         return;
     }
@@ -505,6 +515,7 @@ void WorkingChangesPanel::rebuildChangeTree()
         empty->setFlags(Qt::NoItemFlags);
         m_summaryLabel->setText(tr("Working tree clean"));
         showDiffText({}, tr("Diff"));
+        updateDiscardAllButton();
         updateDiscardFileButton();
         return;
     }
@@ -548,6 +559,7 @@ void WorkingChangesPanel::rebuildChangeTree()
         m_filesTree->setCurrentItem(selectItem);
     }
 
+    updateDiscardAllButton();
     updateDiscardFileButton();
 
     if (selectedFileItem()) {
