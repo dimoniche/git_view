@@ -15,9 +15,11 @@ class DiffViewerDialog : public QWidget {
 
 public:
     explicit DiffViewerDialog(const QString &title, const QString &diff, QWidget *parent = nullptr,
-                             const DiffViewerSources &sources = {});
+                             const DiffViewerSources &sources = {},
+                             const QString &sourceFilePath = {});
 
     static void showDiff(QWidget *parent, const QString &title, const QString &diff,
-                         const DiffViewerSources &sources = {});
+                         const DiffViewerSources &sources = {},
+                         const QString &sourceFilePath = {});
     static void showSource(QWidget *parent, const QString &title, const QString &text);
 };

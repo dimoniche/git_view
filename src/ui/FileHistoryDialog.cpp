@@ -81,6 +81,7 @@ FileHistoryDialog::FileHistoryDialog(GitService *git, const QString &repoPath,
     });
 
     m_diffViewer = new DiffViewerWidget(splitter);
+    m_diffViewer->setSourceFilePath(filePath);
 
     splitter->addWidget(m_commitList);
     splitter->addWidget(m_diffViewer);

@@ -66,7 +66,7 @@ DiffViewerWidget::DiffViewerWidget(QWidget *parent)
 
     m_diffView = new QPlainTextEdit(m_rootSplitter);
     configureEditor(m_diffView);
-    new DiffHighlighter(m_diffView->document());
+    new DiffHighlighter(m_diffView->document(), m_diffView);
     connect(m_diffView, &QPlainTextEdit::cursorPositionChanged, this,
             &DiffViewerWidget::onDiffCursorChanged);
 
@@ -75,10 +75,10 @@ DiffViewerWidget::DiffViewerWidget(QWidget *parent)
     labeledEditor(tr("After"), &m_afterLabel, &m_afterView, m_sourceSplitter);
     configureEditor(m_beforeView);
     configureEditor(m_afterView);
-    m_beforeHighlighter =
-        new SourceChangeHighlighter(SourceChangeHighlighter::Kind::Removed, m_beforeView->document());
-    m_afterHighlighter =
-        new SourceChangeHighlighter(SourceChangeHighlighter::Kind::Added, m_afterView->document());
+    m_beforeHighlighter = new SourceChangeHighlighter(SourceChangeHighlighter::Kind::Removed,
+                                                      m_beforeView, m_beforeView->document());
+    m_afterHighlighter = new SourceChangeHighlighter(SourceChangeHighlighter::Kind::Added,
+                                                     m_afterView, m_afterView->document());
 
     m_beforeView->setScrollPartner(m_afterView);
     m_afterView->setScrollPartner(m_beforeView);
@@ -193,6 +193,17 @@ void DiffViewerWidget::setDiff(const QString &diff)
     }
 }
 
+void DiffViewerWidget::setSourceFilePath(const QString &path)
+{
+    m_sourceFilePath = path;
+    if (m_beforeHighlighter) {
+        m_beforeHighlighter->setFilePath(path);
+    }
+    if (m_afterHighlighter) {
+        m_afterHighlighter->setFilePath(path);
+    }
+}
+
 void DiffViewerWidget::setSources(const QString &beforeText, const QString &afterText,
                                   const QString &beforeCaption, const QString &afterCaption)
 {
@@ -243,6 +254,7 @@ void DiffViewerWidget::clear()
     m_alignedView = {};
     m_rawBefore.clear();
     m_rawAfter.clear();
+    m_sourceFilePath.clear();
     m_diffView->clear();
     m_beforeView->clear();
     m_afterView->clear();

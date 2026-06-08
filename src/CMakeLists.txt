@@ -20,6 +20,8 @@ set(GIT_VIEW_SOURCES
     ui/RepoTerminalPanel.cpp
     ui/PtySession.cpp
     ui/VtermTerminalWidget.cpp
+    ui/CodeSyntax.cpp
+    ui/EditorTheme.cpp
     ui/DiffHighlighter.cpp
     ui/DialogTitleBar.cpp
     ui/DiffViewerDialog.cpp

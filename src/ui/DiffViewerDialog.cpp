@@ -10,7 +10,8 @@
 #include <QVBoxLayout>
 
 DiffViewerDialog::DiffViewerDialog(const QString &title, const QString &diff, QWidget *parent,
-                                   const DiffViewerSources &sources)
+                                   const DiffViewerSources &sources,
+                                   const QString &sourceFilePath)
     : QWidget(parent)
 {
     setWindowTitle(title);
@@ -30,6 +31,9 @@ DiffViewerDialog::DiffViewerDialog(const QString &title, const QString &diff, QW
 
     auto *viewer = new DiffViewerWidget(content);
     viewer->setDiff(diff);
+    if (!sourceFilePath.isEmpty()) {
+        viewer->setSourceFilePath(sourceFilePath);
+    }
     if (!sources.before.isEmpty() || !sources.after.isEmpty()) {
         viewer->setSources(sources.before, sources.after, sources.beforeCaption,
                            sources.afterCaption);
@@ -50,9 +54,10 @@ DiffViewerDialog::DiffViewerDialog(const QString &title, const QString &diff, QW
 }
 
 void DiffViewerDialog::showDiff(QWidget *parent, const QString &title, const QString &text,
-                                const DiffViewerSources &sources)
+                                const DiffViewerSources &sources,
+                                const QString &sourceFilePath)
 {
-    auto *dialog = new DiffViewerDialog(title, text, parent, sources);
+    auto *dialog = new DiffViewerDialog(title, text, parent, sources, sourceFilePath);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->show();
 }

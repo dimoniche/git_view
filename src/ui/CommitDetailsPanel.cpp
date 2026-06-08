@@ -88,7 +88,7 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     diffFont.setFamily(QStringLiteral("Monospace"));
 #endif
     m_diffView->setFont(diffFont);
-    new DiffHighlighter(m_diffView->document());
+    new DiffHighlighter(m_diffView->document(), m_diffView);
     diffLayout->addWidget(m_diffView);
 
     splitter->addWidget(diffWidget);
@@ -278,7 +278,7 @@ void CommitDetailsPanel::openDiffInSeparateWindow()
         return;
     }
 
-    DiffViewerDialog::showDiff(this, title, diff, buildSourcesForFile(path));
+    DiffViewerDialog::showDiff(this, title, diff, buildSourcesForFile(path), path);
 }
 
 void CommitDetailsPanel::openFileHistoryInSeparateWindow(const QString &path)

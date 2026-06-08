@@ -22,6 +22,7 @@ public:
     explicit DiffViewerWidget(QWidget *parent = nullptr);
 
     void setDiff(const QString &diff);
+    void setSourceFilePath(const QString &path);
     void setSources(const QString &beforeText, const QString &afterText,
                     const QString &beforeCaption = QString(),
                     const QString &afterCaption = QString());
@@ -60,6 +61,7 @@ private:
     DiffParser::AlignedSideBySideView m_alignedView;
     QString m_rawBefore;
     QString m_rawAfter;
+    QString m_sourceFilePath;
     bool m_syncingSourceNavigation = false;
     QObject *m_pendingClickViewport = nullptr;
     QPoint m_pendingClickPos;

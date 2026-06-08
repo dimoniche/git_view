@@ -166,7 +166,7 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
     diffFont.setFamily(QStringLiteral("Monospace"));
 #endif
     m_diffView->setFont(diffFont);
-    new DiffHighlighter(m_diffView->document());
+    new DiffHighlighter(m_diffView->document(), m_diffView);
     diffLayout->addWidget(m_diffView);
 
     splitter->addWidget(diffWidget);
@@ -767,7 +767,7 @@ void WorkingChangesPanel::openDiffInSeparateWindow()
     }
 
     const DiffViewerSources sources = buildSourcesForFile(path, scope, change);
-    DiffViewerDialog::showDiff(this, title, diff, sources);
+    DiffViewerDialog::showDiff(this, title, diff, sources, path);
 }
 
 DiffViewerSources WorkingChangesPanel::buildSourcesForFile(const QString &path,
