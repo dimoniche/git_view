@@ -20,4 +20,8 @@ public:
     GitProcessResult run(const QString &repoPath,
                          const QStringList &args,
                          int timeoutMs = 120000) const;
+    GitProcessResult runWithInput(const QString &repoPath,
+                                  const QStringList &args,
+                                  const QByteArray &stdinData,
+                                  int timeoutMs = 120000) const;
 };

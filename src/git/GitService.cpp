@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QRegularExpression>
+#include <QUrl>
 
 namespace {
 
@@ -73,6 +74,78 @@ constexpr const char kEmptyTreeHash[] = "4b825dc642cb6eb9a060e54bf8d69288fbee490
 bool isDetachedHeadLabel(const QString &name)
 {
     return name.startsWith(QStringLiteral("(HEAD detached"));
+}
+
+struct RemoteEndpoint {
+    QString protocol;
+    QString host;
+    bool valid = false;
+};
+
+RemoteEndpoint parseRemoteUrl(const QString &url)
+{
+    RemoteEndpoint endpoint;
+    const QUrl parsed(url);
+    if (parsed.isValid()
+        && (parsed.scheme() == QStringLiteral("https")
+            || parsed.scheme() == QStringLiteral("http"))) {
+        endpoint.protocol = parsed.scheme();
+        endpoint.host = parsed.host();
+        endpoint.valid = !endpoint.host.isEmpty();
+        return endpoint;
+    }
+
+    if (parsed.isValid() && parsed.scheme() == QStringLiteral("ssh")) {
+        endpoint.protocol = QStringLiteral("ssh");
+        endpoint.host = parsed.host();
+        endpoint.valid = !endpoint.host.isEmpty();
+        return endpoint;
+    }
+
+    if (url.startsWith(QStringLiteral("git@"))) {
+        const int at = url.indexOf(QLatin1Char('@'));
+        const int colon = url.indexOf(QLatin1Char(':'));
+        if (at >= 0 && colon > at) {
+            endpoint.protocol = QStringLiteral("ssh");
+            endpoint.host = url.mid(at + 1, colon - at - 1);
+            endpoint.valid = !endpoint.host.isEmpty();
+        }
+    }
+
+    return endpoint;
+}
+
+QString credentialRequestForUrl(const QString &url)
+{
+    const RemoteEndpoint endpoint = parseRemoteUrl(url);
+    if (!endpoint.valid) {
+        return {};
+    }
+
+    return QStringLiteral("protocol=%1\nhost=%2\n\n").arg(endpoint.protocol, endpoint.host);
+}
+
+QString credentialApproveForUrl(const QString &url,
+                                const QString &username,
+                                const QString &password)
+{
+    const RemoteEndpoint endpoint = parseRemoteUrl(url);
+    if (!endpoint.valid) {
+        return {};
+    }
+
+    return QStringLiteral("protocol=%1\nhost=%2\nusername=%3\npassword=%4\n\n")
+        .arg(endpoint.protocol, endpoint.host, username, password);
+}
+
+QString credentialPasswordFromOutput(const QString &output)
+{
+    for (const QString &line : output.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        if (line.startsWith(QStringLiteral("password="))) {
+            return line.mid(QStringLiteral("password=").size());
+        }
+    }
+    return {};
 }
 
 } // namespace
@@ -1034,6 +1107,206 @@ GitProcessResult GitService::fetchRemote(const QString &repoPath, const QString 
         repoPath, {QStringLiteral("fetch"), QStringLiteral("--prune"), trimmedRemote});
     if (!result.success()) {
         setError(QStringLiteral("git fetch failed"), result);
+    }
+    return result;
+}
+
+QString GitService::configValue(const QString &repoPath, const QString &key) const
+{
+    m_lastError.clear();
+
+    const GitProcessResult result = m_runner.run(repoPath, {QStringLiteral("config"), key});
+    if (!result.success()) {
+        return {};
+    }
+    return result.stdoutText.trimmed();
+}
+
+bool GitService::hasUserIdentity(const QString &repoPath) const
+{
+    return !configValue(repoPath, QStringLiteral("user.name")).isEmpty()
+           && !configValue(repoPath, QStringLiteral("user.email")).isEmpty();
+}
+
+bool GitService::isCommitIdentityError(const GitProcessResult &result)
+{
+    const QString text = result.stderrText + result.stdoutText;
+    return text.contains(QStringLiteral("Author identity unknown"))
+           || text.contains(QStringLiteral("Please tell me who you are"))
+           || text.contains(QStringLiteral("unable to auto-detect email address"));
+}
+
+GitProcessResult GitService::setUserIdentity(const QString &repoPath,
+                                             const QString &name,
+                                             const QString &email,
+                                             bool global) const
+{
+    m_lastError.clear();
+
+    const QString trimmedName = name.trimmed();
+    const QString trimmedEmail = email.trimmed();
+    if (trimmedName.isEmpty()) {
+        m_lastError = QStringLiteral("Author name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+    if (trimmedEmail.isEmpty()) {
+        m_lastError = QStringLiteral("Author email is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    auto configArgs = [global](const QString &key, const QString &value) {
+        QStringList args{QStringLiteral("config")};
+        if (global) {
+            args << QStringLiteral("--global");
+        }
+        args << key << value;
+        return args;
+    };
+
+    const GitProcessResult nameResult =
+        m_runner.run(repoPath, configArgs(QStringLiteral("user.name"), trimmedName));
+    if (!nameResult.success()) {
+        setError(QStringLiteral("git config user.name failed"), nameResult);
+        return nameResult;
+    }
+
+    const GitProcessResult emailResult =
+        m_runner.run(repoPath, configArgs(QStringLiteral("user.email"), trimmedEmail));
+    if (!emailResult.success()) {
+        setError(QStringLiteral("git config user.email failed"), emailResult);
+        return emailResult;
+    }
+
+    return emailResult;
+}
+
+QString GitService::remoteUrl(const QString &repoPath, const QString &remote, bool pushUrl) const
+{
+    m_lastError.clear();
+
+    QStringList args{QStringLiteral("remote"), QStringLiteral("get-url")};
+    if (pushUrl) {
+        args << QStringLiteral("--push");
+    }
+    args << remote.trimmed();
+
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git remote get-url failed"), result);
+        return {};
+    }
+    return result.stdoutText.trimmed();
+}
+
+bool GitService::isHttpsRemoteUrl(const QString &url)
+{
+    return url.startsWith(QStringLiteral("https://")) || url.startsWith(QStringLiteral("http://"));
+}
+
+bool GitService::isRemoteAuthError(const GitProcessResult &result)
+{
+    const QString text = result.stderrText + result.stdoutText;
+    return text.contains(QStringLiteral("Authentication failed"), Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("could not read Username"), Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("could not read Password"), Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("Invalid username or password"), Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("Permission denied (publickey)"), Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("terminal prompts disabled"), Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("HTTP Basic: Access denied"), Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("Support for password authentication was removed"),
+                            Qt::CaseInsensitive)
+           || text.contains(QStringLiteral("access denied"), Qt::CaseInsensitive);
+}
+
+GitProcessResult GitService::probeRemote(const QString &repoPath, const QString &remote) const
+{
+    m_lastError.clear();
+
+    const QString trimmedRemote = remote.trimmed();
+    if (trimmedRemote.isEmpty()) {
+        m_lastError = QStringLiteral("Remote name is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("ls-remote"), trimmedRemote, QStringLiteral("HEAD")});
+    if (!result.success()) {
+        setError(QStringLiteral("git ls-remote failed"), result);
+    }
+    return result;
+}
+
+bool GitService::hasRemoteCredentials(const QString &repoPath, const QString &url) const
+{
+    if (!isHttpsRemoteUrl(url)) {
+        return false;
+    }
+
+    const QString request = credentialRequestForUrl(url);
+    if (request.isEmpty()) {
+        return false;
+    }
+
+    const GitProcessResult result = m_runner.runWithInput(
+        repoPath, {QStringLiteral("credential"), QStringLiteral("fill")}, request.toUtf8());
+    if (!result.success()) {
+        return false;
+    }
+
+    return !credentialPasswordFromOutput(result.stdoutText).isEmpty();
+}
+
+GitProcessResult GitService::storeRemoteCredentials(const QString &repoPath,
+                                                    const QString &url,
+                                                    const QString &username,
+                                                    const QString &password) const
+{
+    m_lastError.clear();
+
+    const QString trimmedUser = username.trimmed();
+    const QString trimmedPassword = password.trimmed();
+    if (trimmedUser.isEmpty()) {
+        m_lastError = QStringLiteral("Username is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+    if (trimmedPassword.isEmpty()) {
+        m_lastError = QStringLiteral("Token is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const QString request = credentialApproveForUrl(url, trimmedUser, trimmedPassword);
+    if (request.isEmpty()) {
+        m_lastError = QStringLiteral("Unsupported remote URL");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    if (configValue(repoPath, QStringLiteral("credential.helper")).isEmpty()) {
+        const GitProcessResult helperResult = m_runner.run(
+            repoPath,
+            {QStringLiteral("config"), QStringLiteral("--global"), QStringLiteral("credential.helper"),
+             QStringLiteral("store")});
+        if (!helperResult.success()) {
+            setError(QStringLiteral("git config credential.helper failed"), helperResult);
+            return helperResult;
+        }
+    }
+
+    const GitProcessResult result = m_runner.runWithInput(
+        repoPath, {QStringLiteral("credential"), QStringLiteral("approve")}, request.toUtf8());
+    if (!result.success()) {
+        setError(QStringLiteral("git credential approve failed"), result);
     }
     return result;
 }

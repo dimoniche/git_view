@@ -150,10 +150,14 @@ void MainWindow::setupUi()
     auto *configureRemotesAction = new QAction(tr("Configure remotes…"), this);
     connect(configureRemotesAction, &QAction::triggered, this, &MainWindow::configureRemotes);
 
+    auto *configureIdentityAction = new QAction(tr("Configure author…"), this);
+    connect(configureIdentityAction, &QAction::triggered, this, &MainWindow::configureGitIdentity);
+
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
     repoMenu->addAction(m_checkoutAction);
     repoMenu->addAction(newBranchAction);
     repoMenu->addAction(configureRemotesAction);
+    repoMenu->addAction(configureIdentityAction);
     repoMenu->addAction(m_publishBranchAction);
     repoMenu->addAction(m_fetchAction);
     repoMenu->addAction(m_pullAction);
@@ -776,6 +780,12 @@ void MainWindow::commitChanges()
         return;
     }
 
+    if (!m_git.hasUserIdentity(m_repo.path())) {
+        if (!promptGitIdentity(tr("Author identity is not configured yet."))) {
+            return;
+        }
+    }
+
     if (stageAllRadio->isChecked()) {
         const GitProcessResult stageResult = m_git.stageAll(m_repo.path());
         if (!stageResult.success()) {
@@ -787,11 +797,24 @@ void MainWindow::commitChanges()
         return;
     }
 
-    const GitProcessResult commitResult = m_git.commit(m_repo.path(), message);
+    auto commitOnce = [&]() { return m_git.commit(m_repo.path(), message); };
+
+    GitProcessResult commitResult = commitOnce();
+    if (!commitResult.success() && GitService::isCommitIdentityError(commitResult)) {
+        if (promptGitIdentity(tr("Git could not determine the commit author."))) {
+            commitResult = commitOnce();
+        }
+    }
     if (!commitResult.success()) {
-        QMessageBox::critical(
-            this, tr("Commit failed"),
-            tr("%1\n\n%2").arg(m_git.lastError(), commitResult.stdoutText.trimmed()));
+        QStringList parts;
+        for (const QString &part :
+             {m_git.lastError(), commitResult.stderrText.trimmed(),
+              commitResult.stdoutText.trimmed()}) {
+            if (!part.isEmpty()) {
+                parts << part;
+            }
+        }
+        QMessageBox::critical(this, tr("Commit failed"), parts.join(QStringLiteral("\n\n")));
         return;
     }
 
@@ -1293,6 +1316,291 @@ void MainWindow::updateBranchActions()
     }
 }
 
+void MainWindow::configureGitIdentity()
+{
+    promptGitIdentity();
+}
+
+bool MainWindow::promptGitIdentity(const QString &reason)
+{
+    const QString repoPath = m_repo.isValid() ? m_repo.path() : QString();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Git author identity"));
+    dialog.resize(520, 300);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    QString intro = tr("Git needs your name and email to create commits.");
+    if (!reason.isEmpty()) {
+        intro += QStringLiteral("\n\n") + reason;
+    }
+    auto *introLabel = new QLabel(intro, &dialog);
+    introLabel->setWordWrap(true);
+    layout->addWidget(introLabel);
+
+    auto *hintLabel = new QLabel(
+        tr("If you use GitHub, use the email from GitHub Settings → Emails "
+           "(or your private noreply address)."),
+        &dialog);
+    hintLabel->setWordWrap(true);
+    layout->addWidget(hintLabel);
+
+    layout->addWidget(new QLabel(tr("Name:"), &dialog));
+    auto *nameEdit = new QLineEdit(&dialog);
+    nameEdit->setText(m_git.configValue(repoPath, QStringLiteral("user.name")));
+    nameEdit->setClearButtonEnabled(true);
+    layout->addWidget(nameEdit);
+
+    layout->addWidget(new QLabel(tr("Email:"), &dialog));
+    auto *emailEdit = new QLineEdit(&dialog);
+    emailEdit->setText(m_git.configValue(repoPath, QStringLiteral("user.email")));
+    emailEdit->setPlaceholderText(tr("you@example.com"));
+    emailEdit->setClearButtonEnabled(true);
+    layout->addWidget(emailEdit);
+
+    auto *globalRadio = new QRadioButton(tr("All repositories (global)"), &dialog);
+    auto *localRadio = new QRadioButton(tr("This repository only"), &dialog);
+    globalRadio->setChecked(true);
+    if (m_repo.isValid()) {
+        layout->addWidget(globalRadio);
+        layout->addWidget(localRadio);
+    }
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (nameEdit->text().trimmed().isEmpty()) {
+        nameEdit->setFocus();
+    } else {
+        emailEdit->setFocus();
+    }
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+
+    const QString name = nameEdit->text().trimmed();
+    const QString email = emailEdit->text().trimmed();
+    if (name.isEmpty()) {
+        QMessageBox::warning(this, tr("Author identity"), tr("Name cannot be empty."));
+        return false;
+    }
+    if (email.isEmpty()) {
+        QMessageBox::warning(this, tr("Author identity"), tr("Email cannot be empty."));
+        return false;
+    }
+    if (!email.contains(QLatin1Char('@'))) {
+        QMessageBox::warning(this, tr("Author identity"), tr("Email address looks invalid."));
+        return false;
+    }
+
+    const bool global = !m_repo.isValid() || globalRadio->isChecked();
+    const GitProcessResult result = m_git.setUserIdentity(repoPath, name, email, global);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Author identity"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return false;
+    }
+
+    return m_git.hasUserIdentity(repoPath);
+}
+
+bool MainWindow::promptRemoteCredentials(const QString &remote, const QString &reason)
+{
+    if (!m_repo.isValid() || remote.isEmpty()) {
+        return false;
+    }
+
+    const QString url = m_git.remoteUrl(m_repo.path(), remote, true);
+    if (url.isEmpty()) {
+        QMessageBox::critical(this, tr("Remote authentication"), m_git.lastError());
+        return false;
+    }
+
+    if (!GitService::isHttpsRemoteUrl(url)) {
+        return ensureRemoteAuthentication(remote, reason);
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Remote authentication"));
+    dialog.resize(520, 320);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    QString intro =
+        tr("Sign in to push to %1.\nRemote URL: %2").arg(remote, url);
+    if (!reason.isEmpty()) {
+        intro += QStringLiteral("\n\n") + reason;
+    }
+    auto *introLabel = new QLabel(intro, &dialog);
+    introLabel->setWordWrap(true);
+    layout->addWidget(introLabel);
+
+    auto *hintLabel = new QLabel(
+        tr("GitHub no longer accepts account passwords for HTTPS. Create a personal access "
+           "token at github.com → Settings → Developer settings → Personal access tokens, "
+           "then paste it below."),
+        &dialog);
+    hintLabel->setWordWrap(true);
+    layout->addWidget(hintLabel);
+
+    layout->addWidget(new QLabel(tr("Username:"), &dialog));
+    auto *usernameEdit = new QLineEdit(&dialog);
+    usernameEdit->setClearButtonEnabled(true);
+    layout->addWidget(usernameEdit);
+
+    layout->addWidget(new QLabel(tr("Token or password:"), &dialog));
+    auto *tokenEdit = new QLineEdit(&dialog);
+    tokenEdit->setEchoMode(QLineEdit::Password);
+    tokenEdit->setClearButtonEnabled(true);
+    layout->addWidget(tokenEdit);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    usernameEdit->setFocus();
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+
+    const QString username = usernameEdit->text().trimmed();
+    const QString token = tokenEdit->text().trimmed();
+    if (username.isEmpty()) {
+        QMessageBox::warning(this, tr("Remote authentication"), tr("Username cannot be empty."));
+        return false;
+    }
+    if (token.isEmpty()) {
+        QMessageBox::warning(this, tr("Remote authentication"), tr("Token cannot be empty."));
+        return false;
+    }
+
+    const GitProcessResult storeResult =
+        m_git.storeRemoteCredentials(m_repo.path(), url, username, token);
+    if (!storeResult.success()) {
+        QMessageBox::critical(
+            this, tr("Remote authentication"),
+            tr("%1\n\n%2").arg(m_git.lastError(), storeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    const GitProcessResult probeResult = m_git.probeRemote(m_repo.path(), remote);
+    if (!probeResult.success()) {
+        QMessageBox::critical(
+            this, tr("Remote authentication"),
+            tr("Saved credentials, but the remote is still unreachable.\n\n%1\n\n%2")
+                .arg(m_git.lastError(), probeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    return true;
+}
+
+bool MainWindow::ensureRemoteAuthentication(const QString &remote, const QString &reason)
+{
+    if (!m_repo.isValid() || remote.isEmpty()) {
+        return false;
+    }
+
+    const QString url = m_git.remoteUrl(m_repo.path(), remote, true);
+    if (url.isEmpty()) {
+        QMessageBox::critical(this, tr("Remote authentication"), m_git.lastError());
+        return false;
+    }
+
+    GitProcessResult probeResult = m_git.probeRemote(m_repo.path(), remote);
+    if (probeResult.success()) {
+        return true;
+    }
+
+    if (GitService::isHttpsRemoteUrl(url)) {
+        if (!m_git.hasRemoteCredentials(m_repo.path(), url)
+            || GitService::isRemoteAuthError(probeResult)) {
+            return promptRemoteCredentials(
+                remote,
+                reason.isEmpty()
+                    ? tr("Could not authenticate to remote \"%1\".").arg(remote)
+                    : reason);
+        }
+        QMessageBox::critical(
+            this, tr("Remote authentication"),
+            tr("%1\n\n%2")
+                .arg(m_git.lastError(), probeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    QMessageBox msgBox(this);
+    msgBox.setIcon(QMessageBox::Information);
+    msgBox.setWindowTitle(tr("SSH authentication"));
+    QString text = reason.isEmpty()
+                       ? tr("Could not authenticate to remote \"%1\".").arg(remote)
+                       : reason;
+    text += QStringLiteral("\n\n") + url;
+    text += QStringLiteral("\n\n")
+            + tr("For SSH remotes, add your public key to the hosting service "
+                 "(GitHub: Settings → SSH and GPG keys), then test in a terminal:\n"
+                 "ssh -T git@github.com");
+    msgBox.setText(text);
+    msgBox.setStandardButtons(QMessageBox::Retry | QMessageBox::Cancel);
+    if (msgBox.exec() != QMessageBox::Retry) {
+        return false;
+    }
+
+    probeResult = m_git.probeRemote(m_repo.path(), remote);
+    if (!probeResult.success()) {
+        QMessageBox::critical(
+            this, tr("SSH authentication"),
+            tr("%1\n\n%2")
+                .arg(m_git.lastError(), probeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    return true;
+}
+
+bool MainWindow::executePush(const Branch &branch, const QString &remote, bool setUpstream,
+                             const QString &failureTitle)
+{
+    if (!ensureRemoteAuthentication(remote)) {
+        return false;
+    }
+
+    auto runPush = [&]() -> GitProcessResult {
+        return setUpstream ? m_git.publishBranch(m_repo.path(), branch.name, remote)
+                           : m_git.pushBranch(m_repo.path(), branch.name, remote);
+    };
+
+    GitProcessResult result = runPush();
+    if (!result.success() && GitService::isRemoteAuthError(result)) {
+        if (promptRemoteCredentials(
+                remote, tr("Authentication failed while pushing to \"%1\".").arg(remote))) {
+            result = runPush();
+        }
+    }
+
+    if (!result.success()) {
+        QStringList parts;
+        for (const QString &part :
+             {m_git.lastError(), result.stderrText.trimmed(), result.stdoutText.trimmed()}) {
+            if (!part.isEmpty()) {
+                parts << part;
+            }
+        }
+        QMessageBox::critical(this, failureTitle, parts.join(QStringLiteral("\n\n")));
+        return false;
+    }
+
+    return true;
+}
+
 void MainWindow::configureRemotes()
 {
     if (!m_repo.isValid()) {
@@ -1736,19 +2044,13 @@ void MainWindow::publishBranch(const Branch &branch)
         return;
     }
 
-    const GitProcessResult result = m_git.publishBranch(m_repo.path(), branch.name, remote);
-    if (!result.success()) {
-        QMessageBox::critical(
-            this, tr("Publish branch failed"),
-            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+    if (!executePush(branch, remote, true, tr("Publish branch failed"))) {
         return;
     }
 
-    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
     QMessageBox::information(
         this, tr("First publish"),
-        output.isEmpty() ? tr("Branch \"%1\" published to %2.").arg(branch.name, remote)
-                         : output);
+        tr("Branch \"%1\" published to %2.").arg(branch.name, remote));
     refreshRepository();
 }
 
@@ -1789,15 +2091,7 @@ bool MainWindow::pushBranchNoPrompt(const Branch &branch)
         return false;
     }
 
-    const GitProcessResult result = m_git.pushBranch(m_repo.path(), branch.name, remote);
-    if (!result.success()) {
-        QMessageBox::critical(
-            this, tr("Push after commit failed"),
-            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
-        return false;
-    }
-
-    return true;
+    return executePush(branch, remote, false, tr("Push after commit failed"));
 }
 
 void MainWindow::pushBranch(const Branch &branch)
@@ -1851,7 +2145,7 @@ void MainWindow::pushBranch(const Branch &branch)
         return;
     }
 
-    if (!pushBranchNoPrompt(branch)) {
+    if (!executePush(branch, remote, false, tr("Push branch failed"))) {
         return;
     }
 

@@ -64,6 +64,7 @@ private slots:
     void fetchRemotes();
     void publishOrPushSelectedBranch();
     void configureRemotes();
+    void configureGitIdentity();
     void showBranchContextMenu(const QPoint &pos);
 
 private:
@@ -101,6 +102,11 @@ private:
     QString pickRemoteForBranch(const Branch &branch, const QString &title);
     QString pickRemoteForFetch(const QString &title);
     QString promptAddRemote(const QString &title);
+    bool promptGitIdentity(const QString &reason = {});
+    bool ensureRemoteAuthentication(const QString &remote, const QString &reason = {});
+    bool promptRemoteCredentials(const QString &remote, const QString &reason = {});
+    bool executePush(const Branch &branch, const QString &remote, bool setUpstream,
+                     const QString &failureTitle);
 
     GitService m_git;
     Repo m_repo;

@@ -63,6 +63,22 @@ public:
     bool hasStagedChanges(const QString &repoPath) const;
 
     GitProcessResult stageAll(const QString &repoPath) const;
+    QString configValue(const QString &repoPath, const QString &key) const;
+    bool hasUserIdentity(const QString &repoPath) const;
+    static bool isCommitIdentityError(const GitProcessResult &result);
+    GitProcessResult setUserIdentity(const QString &repoPath,
+                                     const QString &name,
+                                     const QString &email,
+                                     bool global) const;
+    QString remoteUrl(const QString &repoPath, const QString &remote, bool pushUrl = false) const;
+    static bool isHttpsRemoteUrl(const QString &url);
+    static bool isRemoteAuthError(const GitProcessResult &result);
+    GitProcessResult probeRemote(const QString &repoPath, const QString &remote) const;
+    bool hasRemoteCredentials(const QString &repoPath, const QString &url) const;
+    GitProcessResult storeRemoteCredentials(const QString &repoPath,
+                                            const QString &url,
+                                            const QString &username,
+                                            const QString &password) const;
     GitProcessResult commit(const QString &repoPath, const QString &message) const;
     GitProcessResult discardAllChanges(const QString &repoPath) const;
     GitProcessResult discardFileChanges(const QString &repoPath,
