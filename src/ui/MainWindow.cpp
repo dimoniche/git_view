@@ -713,7 +713,7 @@ void MainWindow::applyLaunchOptions(const AppLaunchOptions &options)
         break;
     case LaunchAction::FileHistory:
         if (!options.filePaths.isEmpty()) {
-            FileHistoryDialog::open(nullptr, &m_git, m_repo.path(), options.filePaths.first());
+            FileHistoryDialog::open(this, &m_git, m_repo.path(), options.filePaths.first());
             hide();
         }
         break;

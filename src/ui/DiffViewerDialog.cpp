@@ -2,8 +2,7 @@
 
 #include "ui/DialogTitleBar.h"
 #include "ui/DiffViewerWidget.h"
-
-#include <QApplication>
+#include "ui/TopLevelDialogUtils.h"
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QShortcut>
@@ -58,12 +57,9 @@ void DiffViewerDialog::showDiff(QWidget *parent, const QString &title, const QSt
                                 const DiffViewerSources &sources,
                                 const QString &sourceFilePath)
 {
-    QWidget *dialogParent = parent && parent->isVisible() ? parent : nullptr;
-    auto *dialog = new DiffViewerDialog(title, text, dialogParent, sources, sourceFilePath);
+    auto *dialog = new DiffViewerDialog(title, text, nullptr, sources, sourceFilePath);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    if (!dialogParent) {
-        QObject::connect(dialog, &QObject::destroyed, qApp, &QCoreApplication::quit);
-    }
+    connectRestoreHiddenOwner(dialog, parent);
     dialog->show();
     dialog->raise();
     dialog->activateWindow();

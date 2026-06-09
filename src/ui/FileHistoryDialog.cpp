@@ -1,5 +1,7 @@
 #include "ui/FileHistoryDialog.h"
 
+#include "ui/TopLevelDialogUtils.h"
+
 #include "git/GitService.h"
 #include "ui/DialogTitleBar.h"
 #include "ui/DiffViewerWidget.h"
@@ -173,13 +175,10 @@ void FileHistoryDialog::open(QWidget *parent, GitService *git, const QString &re
         return;
     }
 
-    QWidget *dialogParent = parent && parent->isVisible() ? parent : nullptr;
-    auto *dialog = new FileHistoryDialog(git, repoPath, filePath, dialogParent);
+    auto *dialog = new FileHistoryDialog(git, repoPath, filePath, nullptr);
     dialog->populateCommitList(commits);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    if (!dialogParent) {
-        QObject::connect(dialog, &QObject::destroyed, qApp, &QCoreApplication::quit);
-    }
+    connectRestoreHiddenOwner(dialog, parent);
     dialog->show();
     dialog->raise();
     dialog->activateWindow();

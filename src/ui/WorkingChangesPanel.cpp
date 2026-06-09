@@ -746,7 +746,7 @@ void WorkingChangesPanel::showFileDiffInWindowImpl(const QString &repoRelativePa
     const QString diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
 
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
-        DiffViewerDialog::showDiff(nullptr, title, m_git->lastError());
+        DiffViewerDialog::showDiff(window(), title, m_git->lastError());
         return;
     }
 
@@ -792,12 +792,12 @@ void WorkingChangesPanel::showFileDiffInWindowImpl(const QString &repoRelativePa
         if (!m_git->lastError().isEmpty()) {
             hint += QLatin1Char('\n') + m_git->lastError();
         }
-        DiffViewerDialog::showDiff(nullptr, title, hint);
+        DiffViewerDialog::showDiff(window(), title, hint);
         return;
     }
 
     const DiffViewerSources sources = buildSourcesForFile(path, scope, change);
-    DiffViewerDialog::showDiff(nullptr, title, diff, sources, path);
+    DiffViewerDialog::showDiff(window(), title, diff, sources, path);
 }
 
 DiffViewerSources WorkingChangesPanel::buildSourcesForFile(const QString &path,
