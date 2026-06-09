@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QTimer>
 #include <QVector>
 #include <QWidget>
 
@@ -17,6 +18,7 @@ public:
     bool startShell(const QString &workingDirectory);
     void stopShell();
     bool isRunning() const;
+    void syncDisplaySize();
     void setGridSize(int rows, int columns);
 
 signals:
@@ -26,6 +28,7 @@ protected:
     QSize sizeHint() const override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
@@ -36,16 +39,19 @@ private:
     static int onSbPushLine(int cols, const VTermScreenCell *cells, void *user);
     static int onSbPopLine(int cols, VTermScreenCell *cells, void *user);
     static int onSbClear(void *user);
+    static int onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void *user);
+    static int onSetTermProp(VTermProp prop, VTermValue *val, void *user);
 
     void onPtyReadyRead(const QByteArray &data);
     void onPtyExited(int exitCode);
-    void updateTerminalSize();
+    void updateTerminalSize(bool force = false);
     void sendKey(VTermKey key, VTermModifier mod);
     void clearScrollback();
     bool scrollbackPush(int cols, const VTermScreenCell *cells);
     bool scrollbackPop(int cols, VTermScreenCell *cells);
     bool cellAtDisplayLine(int displayLine, int col, VTermScreenCell *cell) const;
     void clampScrollOffset();
+    void paintCursor(QPainter &painter) const;
 
     PtySession *m_pty = nullptr;
     VTerm *m_vterm = nullptr;
@@ -55,6 +61,13 @@ private:
     int m_cellWidth = 8;
     int m_cellHeight = 16;
     bool m_hasFocus = false;
+    int m_cursorRow = 0;
+    int m_cursorCol = 0;
+    bool m_cursorVisible = true;
+    bool m_cursorBlink = false;
+    bool m_cursorBlinkPhase = true;
+    int m_cursorShape = VTERM_PROP_CURSORSHAPE_BLOCK;
+    QTimer *m_cursorBlinkTimer = nullptr;
     QVector<QVector<VTermScreenCell>> m_scrollback;
     int m_scrollOffset = 0;
     static constexpr int kMaxScrollbackLines = 10000;

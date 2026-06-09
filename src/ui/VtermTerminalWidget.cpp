@@ -3,12 +3,16 @@
 #include "ui/PtySession.h"
 
 #include <QFocusEvent>
+#include <QMetaObject>
+#include <QPointer>
 #include <QFont>
+#include <QTimer>
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QWheelEvent>
 
 #include <vterm.h>
@@ -125,26 +129,15 @@ int damageCallback(VTermRect rect, void *user)
 {
     Q_UNUSED(rect);
     auto *widget = static_cast<VtermTerminalWidget *>(user);
-    widget->update();
-    return 1;
-}
-
-int movecursorCallback(VTermPos pos, VTermPos oldpos, int visible, void *user)
-{
-    Q_UNUSED(pos);
-    Q_UNUSED(oldpos);
-    Q_UNUSED(visible);
-    auto *widget = static_cast<VtermTerminalWidget *>(user);
-    widget->update();
-    return 1;
-}
-
-int settermpropCallback(VTermProp prop, VTermValue *val, void *user)
-{
-    Q_UNUSED(prop);
-    Q_UNUSED(val);
-    auto *widget = static_cast<VtermTerminalWidget *>(user);
-    widget->update();
+    if (!widget) {
+        return 1;
+    }
+    QPointer<VtermTerminalWidget> guard(widget);
+    QTimer::singleShot(0, widget, [guard]() {
+        if (guard) {
+            guard->update();
+        }
+    });
     return 1;
 }
 
@@ -189,6 +182,13 @@ VtermTerminalWidget::VtermTerminalWidget(QWidget *parent)
     m_pty = new PtySession(this);
     connect(m_pty, &PtySession::readyRead, this, &VtermTerminalWidget::onPtyReadyRead);
     connect(m_pty, &PtySession::exited, this, &VtermTerminalWidget::onPtyExited);
+
+    m_cursorBlinkTimer = new QTimer(this);
+    m_cursorBlinkTimer->setInterval(500);
+    connect(m_cursorBlinkTimer, &QTimer::timeout, this, [this]() {
+        m_cursorBlinkPhase = !m_cursorBlinkPhase;
+        update();
+    });
 }
 
 VtermTerminalWidget::~VtermTerminalWidget()
@@ -200,7 +200,7 @@ bool VtermTerminalWidget::startShell(const QString &workingDirectory)
 {
     stopShell();
 
-    updateTerminalSize();
+    updateTerminalSize(true);
 
     m_vterm = vterm_new(m_rows, m_cols);
     vterm_set_utf8(m_vterm, 1);
@@ -209,8 +209,8 @@ bool VtermTerminalWidget::startShell(const QString &workingDirectory)
     m_vtermScreen = vterm_obtain_screen(m_vterm);
     static VTermScreenCallbacks screenCallbacks = {};
     screenCallbacks.damage = damageCallback;
-    screenCallbacks.movecursor = movecursorCallback;
-    screenCallbacks.settermprop = settermpropCallback;
+    screenCallbacks.movecursor = onMoveCursor;
+    screenCallbacks.settermprop = onSetTermProp;
     screenCallbacks.bell = bellCallback;
     screenCallbacks.resize = resizeCallback;
     screenCallbacks.sb_pushline = onSbPushLine;
@@ -227,24 +227,43 @@ bool VtermTerminalWidget::startShell(const QString &workingDirectory)
         return false;
     }
 
+    connect(m_pty, &PtySession::readyRead, this, &VtermTerminalWidget::onPtyReadyRead,
+            Qt::UniqueConnection);
+    connect(m_pty, &PtySession::exited, this, &VtermTerminalWidget::onPtyExited,
+            Qt::UniqueConnection);
+
     m_pty->resize(m_cols, m_rows);
+    m_cursorRow = 0;
+    m_cursorCol = 0;
+    m_cursorVisible = true;
+    m_cursorBlinkPhase = true;
+    if (m_cursorBlinkTimer) {
+        m_cursorBlinkTimer->start();
+    }
     update();
     return true;
 }
 
 void VtermTerminalWidget::stopShell()
 {
-    clearScrollback();
-
     if (m_pty) {
         m_pty->stop();
     }
 
-    if (m_vterm) {
-        vterm_free(m_vterm);
-        m_vterm = nullptr;
-        m_vtermScreen = nullptr;
+    VTerm *vterm = m_vterm;
+    m_vterm = nullptr;
+    m_vtermScreen = nullptr;
+
+    if (vterm) {
+        vterm_free(vterm);
     }
+
+    if (m_cursorBlinkTimer) {
+        m_cursorBlinkTimer->stop();
+    }
+
+    clearScrollback();
+    update();
 }
 
 bool VtermTerminalWidget::isRunning() const
@@ -257,10 +276,19 @@ QSize VtermTerminalWidget::sizeHint() const
     return {m_cellWidth * m_cols + 8, m_cellHeight * m_rows + 8};
 }
 
-void VtermTerminalWidget::updateTerminalSize()
+void VtermTerminalWidget::syncDisplaySize()
+{
+    updateTerminalSize(true);
+}
+
+void VtermTerminalWidget::updateTerminalSize(bool force)
 {
     const int cols = qMax(10, (width() - 4) / m_cellWidth);
     const int rows = qMax(4, (height() - 4) / m_cellHeight);
+    if (!force && cols == m_cols && rows == m_rows) {
+        return;
+    }
+
     m_cols = cols;
     m_rows = rows;
 
@@ -281,9 +309,15 @@ void VtermTerminalWidget::resizeEvent(QResizeEvent *event)
     updateTerminalSize();
 }
 
+void VtermTerminalWidget::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    QTimer::singleShot(0, this, [this]() { updateTerminalSize(true); });
+}
+
 void VtermTerminalWidget::onPtyReadyRead(const QByteArray &data)
 {
-    if (!m_vterm || data.isEmpty()) {
+    if (!m_vterm || !m_pty || !m_pty->isRunning() || data.isEmpty()) {
         return;
     }
 
@@ -353,11 +387,105 @@ void VtermTerminalWidget::paintEvent(QPaintEvent *event)
             painter.drawText(cellRect, Qt::AlignLeft | Qt::AlignVCenter, text);
         }
     }
+
+    paintCursor(painter);
+}
+
+int VtermTerminalWidget::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void *user)
+{
+    Q_UNUSED(oldpos);
+    auto *widget = static_cast<VtermTerminalWidget *>(user);
+    if (!widget) {
+        return 1;
+    }
+    widget->m_cursorRow = pos.row;
+    widget->m_cursorCol = pos.col;
+    widget->m_cursorVisible = visible != 0;
+    widget->update();
+    return 1;
+}
+
+int VtermTerminalWidget::onSetTermProp(VTermProp prop, VTermValue *val, void *user)
+{
+    auto *widget = static_cast<VtermTerminalWidget *>(user);
+    if (!widget) {
+        return 1;
+    }
+    if (val) {
+        switch (prop) {
+        case VTERM_PROP_CURSORVISIBLE:
+            widget->m_cursorVisible = val->boolean != 0;
+            break;
+        case VTERM_PROP_CURSORBLINK:
+            widget->m_cursorBlink = val->boolean != 0;
+            widget->m_cursorBlinkPhase = true;
+            break;
+        case VTERM_PROP_CURSORSHAPE:
+            widget->m_cursorShape = val->number;
+            break;
+        default:
+            break;
+        }
+    }
+    widget->update();
+    return 1;
+}
+
+void VtermTerminalWidget::paintCursor(QPainter &painter) const
+{
+    if (!m_vtermScreen || !m_hasFocus || m_scrollOffset > 0 || !m_cursorVisible) {
+        return;
+    }
+    if (m_cursorBlink && !m_cursorBlinkPhase) {
+        return;
+    }
+    if (m_cursorRow < 0 || m_cursorRow >= m_rows || m_cursorCol < 0 || m_cursorCol >= m_cols) {
+        return;
+    }
+
+    const QColor defaultFg = QColor(0xd4, 0xd4, 0xd4);
+    const QColor defaultBg = QColor(0x1e, 0x1e, 0x1e);
+
+    const int displayLine = static_cast<int>(m_scrollback.size()) + m_cursorRow;
+    VTermScreenCell cell{};
+    cellAtDisplayLine(displayLine, m_cursorCol, &cell);
+
+    const QColor fg = colorFromVterm(&cell.fg, true, defaultFg);
+    const QColor bg = colorFromVterm(&cell.bg, false, defaultBg);
+
+    const QRect cellRect(m_cursorCol * m_cellWidth + 2, m_cursorRow * m_cellHeight + 2, m_cellWidth,
+                         m_cellHeight);
+
+    QString text;
+    for (int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell.chars[i] != 0; ++i) {
+        text.append(QChar::fromUcs4(cell.chars[i]));
+    }
+
+    switch (m_cursorShape) {
+    case VTERM_PROP_CURSORSHAPE_UNDERLINE: {
+        const int lineHeight = qMax(2, m_cellHeight / 8);
+        painter.fillRect(cellRect.left(), cellRect.bottom() - lineHeight + 1, cellRect.width(),
+                         lineHeight, fg);
+        break;
+    }
+    case VTERM_PROP_CURSORSHAPE_BAR_LEFT: {
+        const int lineWidth = qMax(2, m_cellWidth / 8);
+        painter.fillRect(cellRect.left(), cellRect.top(), lineWidth, cellRect.height(), fg);
+        break;
+    }
+    default:
+        painter.fillRect(cellRect, fg);
+        if (!text.isEmpty()) {
+            painter.setPen(bg);
+            painter.drawText(cellRect, Qt::AlignLeft | Qt::AlignVCenter, text);
+        }
+        break;
+    }
 }
 
 void VtermTerminalWidget::sendKey(VTermKey key, VTermModifier mod)
 {
-    if (!m_vterm || !m_pty || key == VTERM_KEY_NONE) {
+    if (!m_vterm || !m_pty || !m_pty->isRunning() || key == VTERM_KEY_NONE) {
         return;
     }
 
@@ -366,7 +494,7 @@ void VtermTerminalWidget::sendKey(VTermKey key, VTermModifier mod)
 
 void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
 {
-    if (!m_vterm || !m_pty) {
+    if (!m_vterm || !m_pty || !m_pty->isRunning()) {
         QWidget::keyPressEvent(event);
         return;
     }
@@ -405,12 +533,18 @@ void VtermTerminalWidget::mousePressEvent(QMouseEvent *event)
 void VtermTerminalWidget::focusInEvent(QFocusEvent *event)
 {
     m_hasFocus = true;
+    m_cursorBlinkPhase = true;
+    if (m_cursorBlinkTimer && m_vtermScreen) {
+        m_cursorBlinkTimer->start();
+    }
+    update();
     QWidget::focusInEvent(event);
 }
 
 void VtermTerminalWidget::focusOutEvent(QFocusEvent *event)
 {
     m_hasFocus = false;
+    update();
     QWidget::focusOutEvent(event);
 }
 
@@ -509,8 +643,12 @@ bool VtermTerminalWidget::cellAtDisplayLine(int displayLine, int col,
         return false;
     }
 
+    int screenRows = 0;
+    int screenCols = 0;
+    vterm_get_size(m_vterm, &screenRows, &screenCols);
+
     const int screenRow = displayLine - static_cast<int>(m_scrollback.size());
-    if (screenRow < 0 || screenRow >= m_rows || col >= m_cols) {
+    if (screenRow < 0 || screenRow >= screenRows || col < 0 || col >= screenCols) {
         return false;
     }
 

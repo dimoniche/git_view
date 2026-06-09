@@ -9,6 +9,10 @@
 
 #include <cstring>
 
+#if defined(Q_OS_UNIX)
+#include <signal.h>
+#endif
+
 namespace {
 
 bool argumentsAskForHelp(int argc, char *argv[])
@@ -29,6 +33,10 @@ int main(int argc, char *argv[])
         QTextStream(stdout) << AppLaunchOptions::helpText() << '\n';
         return 0;
     }
+
+#if defined(Q_OS_UNIX)
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("git_view"));

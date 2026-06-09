@@ -431,6 +431,7 @@ void MainWindow::showTerminalPanel()
         m_toggleTerminalAction->setChecked(true);
     }
     if (m_terminalPanel) {
+        m_terminalPanel->ensureShellStarted();
         m_terminalPanel->focusInput();
     }
 }
@@ -450,6 +451,8 @@ void MainWindow::toggleTerminalPanel(bool visible)
             sizes[1] = 180;
             m_rootSplitter->setSizes(sizes);
         }
+        m_terminalPanel->ensureShellStarted();
+        m_terminalPanel->focusInput();
     }
 }
 

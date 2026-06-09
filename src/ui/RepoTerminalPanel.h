@@ -13,9 +13,13 @@ public:
 
     void setWorkingDirectory(const QString &repoPath);
     void focusInput();
+    void ensureShellStarted();
 
 signals:
     void repositoryMayHaveChanged();
+
+protected:
+    void showEvent(QShowEvent *event) override;
 
 private:
     void onShellExited(int exitCode);

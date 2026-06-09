@@ -4,6 +4,8 @@
 
 #include <QFileInfo>
 #include <QLabel>
+#include <QShowEvent>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #if !defined(Q_OS_UNIX)
@@ -62,10 +64,43 @@ void RepoTerminalPanel::setWorkingDirectory(const QString &repoPath)
     }
 
     m_cwdLabel->setText(tr("Shell in: %1").arg(m_repoRoot));
-    m_terminal->startShell(m_repoRoot);
+    if (m_terminal->isRunning()) {
+        m_terminal->stopShell();
+    }
+    if (isVisible()) {
+        ensureShellStarted();
+    }
 #else
     Q_UNUSED(m_repoRoot);
 #endif
+}
+
+void RepoTerminalPanel::ensureShellStarted()
+{
+#if defined(Q_OS_UNIX)
+    if (!m_terminal || m_repoRoot.isEmpty()) {
+        return;
+    }
+
+    if (m_terminal->isRunning()) {
+        m_terminal->syncDisplaySize();
+        return;
+    }
+
+    m_cwdLabel->setText(tr("Shell in: %1").arg(m_repoRoot));
+    if (!m_terminal->startShell(m_repoRoot)) {
+        m_cwdLabel->setText(tr("Failed to start shell in: %1").arg(m_repoRoot));
+    }
+#endif
+}
+
+void RepoTerminalPanel::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    QTimer::singleShot(0, this, [this]() {
+        ensureShellStarted();
+        focusInput();
+    });
 }
 
 void RepoTerminalPanel::focusInput()

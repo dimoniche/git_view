@@ -115,6 +115,9 @@ void PtySession::write(const QByteArray &data)
             if (errno == EINTR) {
                 continue;
             }
+            if (errno == EPIPE) {
+                onChildExited();
+            }
             break;
         }
         offset += written;
@@ -153,6 +156,10 @@ void PtySession::onReadyRead()
 
 void PtySession::onChildExited()
 {
+    if (!m_running) {
+        return;
+    }
+
     int status = 0;
     if (m_childPid > 0) {
         waitpid(m_childPid, &status, WNOHANG);
