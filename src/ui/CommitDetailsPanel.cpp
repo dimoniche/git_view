@@ -58,7 +58,7 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_filesList, &QListWidget::currentRowChanged, this,
             &CommitDetailsPanel::onFileSelectionChanged);
-    connect(m_filesList, &QListWidget::itemDoubleClicked, this,
+    connect(m_filesList, &QListWidget::itemActivated, this,
             &CommitDetailsPanel::onFileDoubleClicked);
     connect(m_filesList, &QWidget::customContextMenuRequested, this,
             &CommitDetailsPanel::showFilesContextMenu);

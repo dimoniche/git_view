@@ -90,7 +90,7 @@ CommitHistoryView::CommitHistoryView(QWidget *parent)
                 }
                 selectRow(current.row(), false);
             });
-    connect(m_table, &QTableView::doubleClicked, this,
+    connect(m_table, &QTableView::activated, this,
             [this](const QModelIndex &index) { openCommitDetails(index.row()); });
     connect(m_table, &QTableView::customContextMenuRequested, this,
             [this](const QPoint &pos) {

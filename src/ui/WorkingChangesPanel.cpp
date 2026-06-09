@@ -137,7 +137,7 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
             &WorkingChangesPanel::onFileSelectionChanged);
     connect(m_filesTree, &QTreeWidget::itemSelectionChanged, this,
             &WorkingChangesPanel::updateDiscardFileButton);
-    connect(m_filesTree, &QTreeWidget::itemDoubleClicked, this,
+    connect(m_filesTree, &QTreeWidget::itemActivated, this,
             &WorkingChangesPanel::onFileDoubleClicked);
     connect(m_filesTree, &QWidget::customContextMenuRequested, this,
             &WorkingChangesPanel::showFilesContextMenu);

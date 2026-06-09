@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QFontMetrics>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
@@ -221,6 +222,7 @@ void CommitGraphWidget::mousePressEvent(QMouseEvent *event)
         return;
     }
 
+    setFocus(Qt::MouseFocusReason);
     emit rowClicked(row);
 }
 
@@ -236,4 +238,15 @@ void CommitGraphWidget::mouseDoubleClickEvent(QMouseEvent *event)
     }
 
     emit rowDoubleClicked(row);
+}
+
+void CommitGraphWidget::keyPressEvent(QKeyEvent *event)
+{
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && m_selectedRow >= 0) {
+        emit rowDoubleClicked(m_selectedRow);
+        event->accept();
+        return;
+    }
+
+    QWidget::keyPressEvent(event);
 }

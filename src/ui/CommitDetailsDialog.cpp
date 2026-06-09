@@ -93,7 +93,7 @@ CommitDetailsDialog::CommitDetailsDialog(GitService *git, const QString &repoPat
             loadDiffForFile(path);
         }
     });
-    connect(m_filesList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+    connect(m_filesList, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
         if (!item) {
             return;
         }
