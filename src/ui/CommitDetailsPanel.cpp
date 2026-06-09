@@ -1,5 +1,6 @@
 #include "ui/CommitDetailsPanel.h"
 
+#include "git/DiffParser.h"
 #include "git/GitService.h"
 #include "ui/DiffHighlighter.h"
 #include "ui/DiffDisplay.h"
@@ -228,7 +229,14 @@ void CommitDetailsPanel::loadDiffForCurrentFile()
         return;
     }
 
-    showDiffText(diff, m_diffTitle->text());
+    const QString displayDiff = DiffParser::prepareDiffForDisplay(diff);
+    if (!DiffParser::shouldSkipExpensiveDiffProcessing(diff)
+        && DiffParser::diffShowsNoContentChange(displayDiff)) {
+        showDiffText(equivalentContentDespiteDiffMessage(this), m_diffTitle->text());
+        return;
+    }
+
+    showDiffText(displayDiff, m_diffTitle->text());
 }
 
 DiffViewerSources CommitDetailsPanel::buildSourcesForFile(const QString &path) const

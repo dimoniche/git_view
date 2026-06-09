@@ -9,6 +9,12 @@ private slots:
     void extractsSingleFilePatch();
     void alignedViewHandlesUnequalGapBetweenHunks();
     void alignedViewMapsAllHunkChangesToDisplayRows();
+    void detectsEquivalentContentDespiteFullFileDiff();
+    void detectsRealContentChange();
+    void detectsModeOnlyDiff();
+    void sanitizesLineEndingOnlyPairs();
+    void keepsRealChangesAfterSanitizing();
+    void skipsNormalizationForLargeDiff();
 };
 
 void TestDiffParser::alignedViewHandlesUnequalGapBetweenHunks()
@@ -153,6 +159,93 @@ void TestDiffParser::extractsSingleFilePatch()
     QVERIFY(patch.contains(QStringLiteral("README.md")));
     QVERIFY(patch.contains(QStringLiteral("+new")));
     QVERIFY(!patch.contains(QStringLiteral("other.txt")));
+}
+
+void TestDiffParser::detectsEquivalentContentDespiteFullFileDiff()
+{
+    const QString line = QStringLiteral("'use strict';");
+    const QString diff = QStringLiteral(
+        "diff --git a/file.js b/file.js\n"
+        "index abc..def 100644\n"
+        "--- a/file.js\n"
+        "+++ b/file.js\n"
+        "@@ -1,3 +1,3 @@\n"
+        "-%1\n"
+        "-const x = 1;\n"
+        "-module.exports = x;\n"
+        "+%1\n"
+        "+const x = 1;\n"
+        "+module.exports = x;\n").arg(line);
+
+    QVERIFY(DiffParser::diffShowsNoContentChange(diff));
+    QVERIFY(DiffParser::fileContentsEquivalent(QStringLiteral("a\r\nb"), QStringLiteral("a\nb")));
+    QVERIFY(!DiffParser::fileContentsEquivalent(QStringLiteral("a"), QStringLiteral("b")));
+}
+
+void TestDiffParser::detectsRealContentChange()
+{
+    const QString diff = QStringLiteral(
+        "@@ -1,2 +1,2 @@\n"
+        "-old\n"
+        "+new\n"
+        " context\n");
+
+    QVERIFY(!DiffParser::diffShowsNoContentChange(diff));
+}
+
+void TestDiffParser::detectsModeOnlyDiff()
+{
+    const QString diff = QStringLiteral(
+        "diff --git a/file.js b/file.js\n"
+        "old mode 100644\n"
+        "new mode 100755\n");
+
+    QVERIFY(DiffParser::diffShowsNoContentChange(diff));
+}
+
+void TestDiffParser::sanitizesLineEndingOnlyPairs()
+{
+    const QString diff = QStringLiteral(
+        "@@ -1,2 +1,2 @@\n"
+        "-line one\r\n"
+        "+line one\n"
+        "-line two\r\n"
+        "+line two\n");
+
+    const QString sanitized = DiffParser::sanitizeDiffLineEndingChanges(diff);
+    QVERIFY(!sanitized.contains(QStringLiteral("-line one")));
+    QVERIFY(!sanitized.contains(QStringLiteral("+line one")));
+    QVERIFY(sanitized.contains(QStringLiteral(" line one")));
+    QVERIFY(DiffParser::diffShowsNoContentChange(sanitized));
+    QVERIFY(DiffParser::lineContentEqual(QStringLiteral("alpha\r"), QStringLiteral("alpha")));
+}
+
+void TestDiffParser::keepsRealChangesAfterSanitizing()
+{
+    const QString diff = QStringLiteral(
+        "@@ -1,2 +1,2 @@\n"
+        "-old\n"
+        "+new\n"
+        "-same\r\n"
+        "+same\n");
+
+    const QString sanitized = DiffParser::sanitizeDiffLineEndingChanges(diff);
+    QVERIFY(sanitized.contains(QStringLiteral("-old")));
+    QVERIFY(sanitized.contains(QStringLiteral("+new")));
+    QVERIFY(sanitized.contains(QStringLiteral(" same")));
+    QVERIFY(!DiffParser::diffShowsNoContentChange(sanitized));
+}
+
+void TestDiffParser::skipsNormalizationForLargeDiff()
+{
+    QString diff = QStringLiteral("@@ -1 +1 @@\n");
+    for (int line = 0; line < DiffParser::kLargeDiffLines / 2; ++line) {
+        diff += QStringLiteral("-same\n+same\n");
+    }
+
+    QVERIFY(DiffParser::isLargeDiff(diff));
+    QCOMPARE(DiffParser::prepareDiffForDisplay(diff), diff);
+    QVERIFY(!DiffParser::diffShowsNoContentChange(diff));
 }
 
 QTEST_MAIN(TestDiffParser)

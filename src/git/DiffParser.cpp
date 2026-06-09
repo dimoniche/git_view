@@ -111,6 +111,68 @@ QVector<DiffLineMap> buildDiffLineMap(const QString &diff)
     return map;
 }
 
+QString normalizeLineContent(const QString &line)
+{
+    QString normalized = line;
+    while (normalized.endsWith(QLatin1Char('\r'))) {
+        normalized.chop(1);
+    }
+    return normalized;
+}
+
+QString normalizeForContentComparison(const QString &text)
+{
+    QString normalized = text;
+    normalized.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    normalized.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    return normalized;
+}
+
+bool lineContentEqual(const QString &a, const QString &b)
+{
+    return normalizeLineContent(a) == normalizeLineContent(b);
+}
+
+bool fileContentsEquivalent(const QString &before, const QString &after)
+{
+    return normalizeForContentComparison(before) == normalizeForContentComparison(after);
+}
+
+bool isLargeTextContent(const QString &text)
+{
+    return text.size() >= kLargeTextChars;
+}
+
+bool isLargeDiff(const QString &diff)
+{
+    if (isLargeTextContent(diff)) {
+        return true;
+    }
+
+    int lineCount = 0;
+    for (qsizetype index = 0; index < diff.size(); ++index) {
+        if (diff.at(index) == QLatin1Char('\n') && ++lineCount >= kLargeDiffLines) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool shouldSkipExpensiveDiffProcessing(const QString &diff,
+                                     const QString &before,
+                                     const QString &after)
+{
+    return isLargeDiff(diff) || isLargeTextContent(before) || isLargeTextContent(after);
+}
+
+QString prepareDiffForDisplay(const QString &diff, const QString &before, const QString &after)
+{
+    if (shouldSkipExpensiveDiffProcessing(diff, before, after)) {
+        return diff;
+    }
+    return sanitizeDiffLineEndingChanges(diff);
+}
+
 namespace {
 
 QStringList splitSourceLines(const QString &text)
@@ -187,8 +249,7 @@ FileLineAlignment buildFileLineAlignment(const QString &before, const QString &a
         return alignment;
     }
 
-    constexpr int kMaxCells = 4'000'000;
-    if (static_cast<qint64>(oldCount + 1) * (newCount + 1) > kMaxCells) {
+    if (static_cast<qint64>(oldCount + 1) * (newCount + 1) > kMaxAlignmentCells) {
         const int shared = qMin(oldCount, newCount);
         for (int line = 1; line <= shared; ++line) {
             alignment.oldToNew[line] = line;
@@ -202,7 +263,7 @@ FileLineAlignment buildFileLineAlignment(const QString &before, const QString &a
     QVector<QVector<int>> dp(oldCount + 1, QVector<int>(newCount + 1, 0));
     for (int oldIndex = 1; oldIndex <= oldCount; ++oldIndex) {
         for (int newIndex = 1; newIndex <= newCount; ++newIndex) {
-            if (oldLines.at(oldIndex - 1) == newLines.at(newIndex - 1)) {
+            if (lineContentEqual(oldLines.at(oldIndex - 1), newLines.at(newIndex - 1))) {
                 dp[oldIndex][newIndex] = dp[oldIndex - 1][newIndex - 1] + 1;
             } else {
                 dp[oldIndex][newIndex] =
@@ -214,7 +275,7 @@ FileLineAlignment buildFileLineAlignment(const QString &before, const QString &a
     int oldIndex = oldCount;
     int newIndex = newCount;
     while (oldIndex > 0 && newIndex > 0) {
-        if (oldLines.at(oldIndex - 1) == newLines.at(newIndex - 1)) {
+        if (lineContentEqual(oldLines.at(oldIndex - 1), newLines.at(newIndex - 1))) {
             alignment.oldToNew[oldIndex] = newIndex;
             alignment.newToOld[newIndex] = oldIndex;
             --oldIndex;
@@ -291,13 +352,19 @@ void rebuildDiffLineNavigation(AlignedSideBySideView *view, const QVector<DiffLi
 AlignedSideBySideView buildAlignedSideBySideView(const QString &before, const QString &after,
                                                 const QVector<DiffLineMap> &diffMap)
 {
+    AlignedSideBySideView view;
+    view.diffLineToDisplayRow = QVector<int>(diffMap.size(), 0);
+
+    if (shouldSkipExpensiveDiffProcessing({}, before, after)) {
+        view.beforeText = before;
+        view.afterText = after;
+        return view;
+    }
+
     const QStringList oldLines = splitSourceLines(before);
     const QStringList newLines = splitSourceLines(after);
     const int oldCount = oldLines.size();
     const int newCount = newLines.size();
-
-    AlignedSideBySideView view;
-    view.diffLineToDisplayRow = QVector<int>(diffMap.size(), 0);
 
     if (oldCount == 0 && newCount == 0) {
         return view;
@@ -437,6 +504,230 @@ void applyDiffHighlightsToAlignedView(AlignedSideBySideView *view,
 
     Q_UNUSED(diffMap);
     // Changed rows are assigned during buildAlignedSideBySideView.
+}
+
+namespace {
+
+bool isDiffHeaderLine(const QString &line)
+{
+    return line.startsWith(QStringLiteral("diff --git "))
+           || line.startsWith(QStringLiteral("index "))
+           || line.startsWith(QStringLiteral("--- "))
+           || line.startsWith(QStringLiteral("+++ "))
+           || line.startsWith(QStringLiteral("old mode "))
+           || line.startsWith(QStringLiteral("new mode "))
+           || line.startsWith(QStringLiteral("deleted file mode "))
+           || line.startsWith(QStringLiteral("new file mode "))
+           || line.startsWith(QStringLiteral("similarity index "))
+           || line.startsWith(QStringLiteral("rename "))
+           || line.startsWith(QStringLiteral("Binary files "));
+}
+
+QStringList collapseRemovedAddedLines(const QStringList &removed, const QStringList &added)
+{
+    const int oldCount = removed.size();
+    const int newCount = added.size();
+    if (oldCount == 0 && newCount == 0) {
+        return {};
+    }
+
+    if (static_cast<qint64>(oldCount + 1) * (newCount + 1) > kMaxAlignmentCells) {
+        QStringList passthrough;
+        passthrough.reserve(oldCount + newCount);
+        for (const QString &line : removed) {
+            passthrough.append(QStringLiteral("-") + line);
+        }
+        for (const QString &line : added) {
+            passthrough.append(QStringLiteral("+") + line);
+        }
+        return passthrough;
+    }
+
+    QVector<QVector<int>> dp(oldCount + 1, QVector<int>(newCount + 1, 0));
+    for (int oldIndex = 1; oldIndex <= oldCount; ++oldIndex) {
+        for (int newIndex = 1; newIndex <= newCount; ++newIndex) {
+            if (lineContentEqual(removed.at(oldIndex - 1), added.at(newIndex - 1))) {
+                dp[oldIndex][newIndex] = dp[oldIndex - 1][newIndex - 1] + 1;
+            } else {
+                dp[oldIndex][newIndex] =
+                    qMax(dp[oldIndex - 1][newIndex], dp[oldIndex][newIndex - 1]);
+            }
+        }
+    }
+
+    QStringList reversed;
+    int oldIndex = oldCount;
+    int newIndex = newCount;
+    while (oldIndex > 0 || newIndex > 0) {
+        if (oldIndex > 0 && newIndex > 0
+            && lineContentEqual(removed.at(oldIndex - 1), added.at(newIndex - 1))) {
+            reversed.append(QStringLiteral(" ") + normalizeLineContent(removed.at(oldIndex - 1)));
+            --oldIndex;
+            --newIndex;
+        } else if (newIndex > 0 && (oldIndex == 0 || dp[oldIndex][newIndex - 1] >= dp[oldIndex - 1][newIndex])) {
+            reversed.append(QStringLiteral("+") + added.at(newIndex - 1));
+            --newIndex;
+        } else {
+            reversed.append(QStringLiteral("-") + removed.at(oldIndex - 1));
+            --oldIndex;
+        }
+    }
+
+    QStringList result;
+    result.reserve(reversed.size());
+    for (int index = reversed.size() - 1; index >= 0; --index) {
+        result.append(reversed.at(index));
+    }
+    return result;
+}
+
+QStringList sanitizeHunkBody(const QStringList &body)
+{
+    QStringList result;
+    int index = 0;
+    while (index < body.size()) {
+        QString line = body.at(index);
+        if (line.endsWith(QLatin1Char('\r'))) {
+            line.chop(1);
+        }
+
+        if (line.startsWith(QLatin1Char(' '))) {
+            result.append(line);
+            ++index;
+            continue;
+        }
+
+        const int start = index;
+        QStringList removed;
+        QStringList added;
+        while (index < body.size()) {
+            QString current = body.at(index);
+            if (current.endsWith(QLatin1Char('\r'))) {
+                current.chop(1);
+            }
+            if (!current.startsWith(QLatin1Char('-')) || current.startsWith(QStringLiteral("---"))) {
+                break;
+            }
+            removed.append(current.mid(1));
+            ++index;
+        }
+        while (index < body.size()) {
+            QString current = body.at(index);
+            if (current.endsWith(QLatin1Char('\r'))) {
+                current.chop(1);
+            }
+            if (!current.startsWith(QLatin1Char('+')) || current.startsWith(QStringLiteral("+++"))) {
+                break;
+            }
+            added.append(current.mid(1));
+            ++index;
+        }
+
+        if (!removed.isEmpty() || !added.isEmpty()) {
+            result.append(collapseRemovedAddedLines(removed, added));
+            continue;
+        }
+
+        if (index == start) {
+            result.append(line);
+            ++index;
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+QString sanitizeDiffLineEndingChanges(const QString &diff)
+{
+    if (diff.isEmpty() || isLargeDiff(diff)) {
+        return diff;
+    }
+
+    static const QRegularExpression hunkRe(
+        QStringLiteral("^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@"));
+
+    QStringList output;
+    QStringList hunkBody;
+    bool inHunk = false;
+
+    const auto flushHunk = [&]() {
+        if (hunkBody.isEmpty()) {
+            return;
+        }
+        output.append(sanitizeHunkBody(hunkBody));
+        hunkBody.clear();
+    };
+
+    for (QString rawLine : diff.split(QLatin1Char('\n'))) {
+        if (rawLine.endsWith(QLatin1Char('\r'))) {
+            rawLine.chop(1);
+        }
+
+        if (const QRegularExpressionMatch hunkMatch = hunkRe.match(rawLine); hunkMatch.hasMatch()) {
+            flushHunk();
+            output.append(rawLine);
+            inHunk = true;
+            continue;
+        }
+
+        if (inHunk && !isDiffHeaderLine(rawLine)
+            && (rawLine.startsWith(QLatin1Char(' ')) || rawLine.startsWith(QLatin1Char('-'))
+                || rawLine.startsWith(QLatin1Char('+')))) {
+            hunkBody.append(rawLine);
+            continue;
+        }
+
+        flushHunk();
+        inHunk = false;
+        output.append(rawLine);
+    }
+
+    flushHunk();
+    return output.join(QLatin1Char('\n'));
+}
+
+bool diffShowsNoContentChange(const QString &diff)
+{
+    if (isLargeDiff(diff)) {
+        return false;
+    }
+
+    const QString sanitized = sanitizeDiffLineEndingChanges(diff);
+    if (sanitized.trimmed().isEmpty()) {
+        return false;
+    }
+
+    QStringList removed;
+    QStringList added;
+    bool hasHunkContent = false;
+
+    for (QString line : sanitized.split(QLatin1Char('\n'))) {
+        if (line.endsWith(QLatin1Char('\r'))) {
+            line.chop(1);
+        }
+
+        if (line.startsWith(QLatin1Char('-')) && !line.startsWith(QStringLiteral("---"))) {
+            removed.append(line.mid(1));
+            hasHunkContent = true;
+        } else if (line.startsWith(QLatin1Char('+')) && !line.startsWith(QStringLiteral("+++"))) {
+            added.append(line.mid(1));
+            hasHunkContent = true;
+        } else if (line.startsWith(QLatin1Char(' '))) {
+            hasHunkContent = true;
+        }
+    }
+
+    if (!hasHunkContent) {
+        return sanitized.contains(QStringLiteral("old mode "))
+               && sanitized.contains(QStringLiteral("new mode "));
+    }
+
+    if (removed.isEmpty() && added.isEmpty()) {
+        return true;
+    }
+
+    return fileContentsEquivalent(removed.join(QLatin1Char('\n')), added.join(QLatin1Char('\n')));
 }
 
 } // namespace DiffParser

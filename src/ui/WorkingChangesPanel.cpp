@@ -1,6 +1,7 @@
 #include "ui/WorkingChangesPanel.h"
 
 #include "core/WorkingTreeChange.h"
+#include "git/DiffParser.h"
 #include "git/GitService.h"
 #include "ui/DiffDisplay.h"
 #include "ui/DiffViewerDialog.h"
@@ -683,7 +684,14 @@ void WorkingChangesPanel::loadDiffForCurrentFile()
         return;
     }
 
-    showDiffText(diff, m_diffTitle->text());
+    const QString displayDiff = DiffParser::prepareDiffForDisplay(diff);
+    if (!DiffParser::shouldSkipExpensiveDiffProcessing(diff)
+        && DiffParser::diffShowsNoContentChange(displayDiff)) {
+        showDiffText(equivalentContentDespiteDiffMessage(this), m_diffTitle->text());
+        return;
+    }
+
+    showDiffText(displayDiff, m_diffTitle->text());
 }
 
 bool WorkingChangesPanel::selectFilePath(const QString &repoRelativePath)

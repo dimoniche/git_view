@@ -37,6 +37,8 @@ private slots:
 
 private:
     void configureEditor(QPlainTextEdit *editor);
+    void updatePresentation();
+    bool contentUnchanged() const;
     void applyAlignedSources();
     void applySourceHighlights();
     void applyDisplayLineSelection(QPlainTextEdit *editor, int displayLine);
@@ -59,6 +61,7 @@ private:
     SourceChangeHighlighter *m_afterHighlighter = nullptr;
     QVector<DiffParser::DiffLineMap> m_lineMap;
     DiffParser::AlignedSideBySideView m_alignedView;
+    QString m_rawDiff;
     QString m_rawBefore;
     QString m_rawAfter;
     QString m_sourceFilePath;

@@ -1,5 +1,6 @@
 #include "ui/DiffViewerWidget.h"
 
+#include "ui/DiffDisplay.h"
 #include "ui/DiffHighlighter.h"
 #include "ui/SourceChangeHighlighter.h"
 #include "ui/SourceCodeView.h"
@@ -186,8 +187,58 @@ void DiffViewerWidget::configureEditor(QPlainTextEdit *editor)
 
 void DiffViewerWidget::setDiff(const QString &diff)
 {
-    m_lineMap = DiffParser::buildDiffLineMap(diff);
-    m_diffView->setPlainText(diff);
+    m_rawDiff = diff;
+    updatePresentation();
+}
+
+bool DiffViewerWidget::contentUnchanged() const
+{
+    if (m_rawDiff.isEmpty()
+        || DiffParser::shouldSkipExpensiveDiffProcessing(m_rawDiff, m_rawBefore, m_rawAfter)) {
+        return false;
+    }
+
+    if (!m_rawBefore.isEmpty() && !m_rawAfter.isEmpty()
+        && !m_rawBefore.startsWith(QLatin1Char('('))
+        && !m_rawAfter.startsWith(QLatin1Char('('))
+        && DiffParser::fileContentsEquivalent(m_rawBefore, m_rawAfter)) {
+        return true;
+    }
+
+    return DiffParser::diffShowsNoContentChange(
+        DiffParser::prepareDiffForDisplay(m_rawDiff, m_rawBefore, m_rawAfter));
+}
+
+void DiffViewerWidget::updatePresentation()
+{
+    const QString displayDiff =
+        DiffParser::prepareDiffForDisplay(m_rawDiff, m_rawBefore, m_rawAfter);
+
+    if (contentUnchanged()) {
+        m_lineMap.clear();
+        m_alignedView = {};
+        m_diffView->setPlainText(equivalentContentDespiteDiffMessage(this));
+
+        const bool hasBefore = !m_rawBefore.isEmpty();
+        const bool hasAfter = !m_rawAfter.isEmpty();
+        m_sourceSplitter->setVisible(hasBefore || hasAfter);
+
+        m_beforeView->setPlainText(hasBefore ? m_rawBefore : QString());
+        m_afterView->setPlainText(hasAfter ? m_rawAfter : QString());
+
+        if (m_beforeHighlighter) {
+            m_beforeHighlighter->setPaddingLines({});
+            m_beforeHighlighter->setChangedLines({});
+        }
+        if (m_afterHighlighter) {
+            m_afterHighlighter->setPaddingLines({});
+            m_afterHighlighter->setChangedLines({});
+        }
+        return;
+    }
+
+    m_lineMap = DiffParser::buildDiffLineMap(displayDiff);
+    m_diffView->setPlainText(displayDiff);
     if (!m_rawBefore.isEmpty() || !m_rawAfter.isEmpty()) {
         applyAlignedSources();
     }
@@ -221,7 +272,7 @@ void DiffViewerWidget::setSources(const QString &beforeText, const QString &afte
         m_afterLabel->setText(afterCaption.isEmpty() ? tr("After") : afterCaption);
     }
 
-    applyAlignedSources();
+    updatePresentation();
     onDiffCursorChanged();
 }
 
@@ -252,6 +303,7 @@ void DiffViewerWidget::clear()
 {
     m_lineMap.clear();
     m_alignedView = {};
+    m_rawDiff.clear();
     m_rawBefore.clear();
     m_rawAfter.clear();
     m_sourceFilePath.clear();
