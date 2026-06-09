@@ -53,8 +53,12 @@ private slots:
     void toggleDetailsPanel(bool visible);
     void focusHistoryPanel();
     void commitChanges();
+    void amendLastCommit();
     void discardAllChanges();
     void discardFileChanges(const QStringList &paths);
+    void stageFileChanges(const QStringList &paths);
+    void unstageFileChanges(const QStringList &paths);
+    void stageAllChanges();
     void addPathToGitignore(const QString &path);
     void checkoutBranch(const Branch &branch);
     void checkoutSelectedBranch();
@@ -110,7 +114,7 @@ private:
     bool ensureRemoteAuthentication(const QString &remote, const QString &reason = {});
     bool promptRemoteCredentials(const QString &remote, const QString &reason = {});
     bool executePush(const Branch &branch, const QString &remote, bool setUpstream,
-                     const QString &failureTitle);
+                     const QString &failureTitle, bool forceWithLease = false);
 
     GitService m_git;
     Repo m_repo;
@@ -145,6 +149,7 @@ private:
     QAction *m_toggleBranchesAction = nullptr;
     QAction *m_toggleDetailsAction = nullptr;
     QAction *m_commitAction = nullptr;
+    QAction *m_amendAction = nullptr;
     QAction *m_discardAllAction = nullptr;
     QAction *m_discardFileAction = nullptr;
     QAction *m_checkoutAction = nullptr;

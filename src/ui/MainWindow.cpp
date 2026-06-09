@@ -127,6 +127,11 @@ void MainWindow::setupUi()
     m_commitAction->setEnabled(false);
     connect(m_commitAction, &QAction::triggered, this, &MainWindow::commitChanges);
 
+    m_amendAction = new QAction(tr("Amend last commit…"), this);
+    m_amendAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Return));
+    m_amendAction->setEnabled(false);
+    connect(m_amendAction, &QAction::triggered, this, &MainWindow::amendLastCommit);
+
     m_checkoutAction = new QAction(tr("Checkout branch…"), this);
     m_checkoutAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
     m_checkoutAction->setEnabled(false);
@@ -164,6 +169,7 @@ void MainWindow::setupUi()
     repoMenu->addAction(m_fetchAction);
     repoMenu->addAction(m_pullAction);
     repoMenu->addAction(m_commitAction);
+    repoMenu->addAction(m_amendAction);
     repoMenu->addSeparator();
     repoMenu->addAction(m_discardFileAction);
     repoMenu->addAction(m_discardAllAction);
@@ -282,9 +288,16 @@ void MainWindow::setupUi()
     m_detailsPanel = new CommitDetailsPanel(m_detailsPanelContainer);
     m_workingPanel = new WorkingChangesPanel(m_detailsPanelContainer);
     connect(m_workingPanel, &WorkingChangesPanel::commitRequested, this, &MainWindow::commitChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::amendRequested, this, &MainWindow::amendLastCommit);
     connect(m_workingPanel, &WorkingChangesPanel::discardAllRequested, this, &MainWindow::discardAllChanges);
     connect(m_workingPanel, &WorkingChangesPanel::discardFilesRequested, this,
             &MainWindow::discardFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::stageFilesRequested, this,
+            &MainWindow::stageFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::unstageFilesRequested, this,
+            &MainWindow::unstageFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::stageAllRequested, this,
+            &MainWindow::stageAllChanges);
     connect(m_workingPanel, &WorkingChangesPanel::addToGitignoreRequested, this,
             &MainWindow::addPathToGitignore);
     connect(m_workingPanel, &WorkingChangesPanel::fileSelectionChanged, this,
@@ -920,6 +933,213 @@ void MainWindow::commitChanges()
     refreshRepository();
 }
 
+void MainWindow::amendLastCommit()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Amend commit"), tr("Open a repository first."));
+        return;
+    }
+
+    if (!m_git.hasCommits(m_repo.path())) {
+        QMessageBox::information(this, tr("Amend commit"), tr("There are no commits to amend."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Amend commit"),
+            tr("Cannot amend: resolve merge conflicts first.\n\n%1")
+                .arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const bool dirty = m_git.hasUncommittedChanges(m_repo.path());
+    const Branch currentBranch = currentLocalBranch();
+    const BranchSyncCounts syncCounts = m_git.currentBranchSyncCounts(m_repo.path());
+    const bool likelyPushed =
+        currentBranch.hasUpstream() && syncCounts.valid && syncCounts.ahead == 0;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Amend last commit"));
+    dialog.resize(520, 400);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *infoLabel = new QLabel(
+        tr("Replace the latest commit with a new one. Staged changes can be folded into it, "
+           "or you can edit the commit message only."),
+        &dialog);
+    infoLabel->setWordWrap(true);
+    layout->addWidget(infoLabel);
+
+    if (likelyPushed) {
+        auto *warningLabel = new QLabel(
+            tr("The current branch appears to be in sync with its upstream. Amending rewrites "
+               "history and may require a force push."),
+            &dialog);
+        warningLabel->setWordWrap(true);
+        warningLabel->setStyleSheet(QStringLiteral("color: palette(link);"));
+        layout->addWidget(warningLabel);
+    }
+
+    QRadioButton *stageAllRadio = nullptr;
+    QRadioButton *stagedOnlyRadio = nullptr;
+    if (dirty) {
+        stageAllRadio =
+            new QRadioButton(tr("Stage all changes and amend (git add -A)"), &dialog);
+        stagedOnlyRadio = new QRadioButton(tr("Amend with staged changes only"), &dialog);
+        stageAllRadio->setChecked(true);
+        if (!m_git.hasStagedChanges(m_repo.path())) {
+            stagedOnlyRadio->setEnabled(false);
+        }
+        layout->addWidget(stageAllRadio);
+        layout->addWidget(stagedOnlyRadio);
+    }
+
+    auto *keepMessageCheck =
+        new QCheckBox(tr("Keep commit message unchanged (git commit --amend --no-edit)"), &dialog);
+    layout->addWidget(keepMessageCheck);
+
+    layout->addWidget(new QLabel(tr("Commit message:"), &dialog));
+    auto *messageEdit = new QPlainTextEdit(&dialog);
+    messageEdit->setPlainText(m_git.headCommitMessage(m_repo.path()));
+    messageEdit->setMinimumHeight(140);
+    layout->addWidget(messageEdit, 1);
+
+    const bool hasRemotes = !m_git.remotes(m_repo.path()).isEmpty();
+    const bool canPushAfterAmend = hasRemotes && currentBranch.hasUpstream();
+
+    QSettings settings;
+    auto *pushAfterAmendCheck =
+        new QCheckBox(tr("Push to upstream after amend"), &dialog);
+    pushAfterAmendCheck->setChecked(
+        settings.value(QStringLiteral("ui/pushAfterCommit"), false).toBool());
+    pushAfterAmendCheck->setEnabled(canPushAfterAmend);
+    if (likelyPushed) {
+        pushAfterAmendCheck->setText(tr("Force push to upstream after amend (--force-with-lease)"));
+    }
+    if (!hasRemotes) {
+        pushAfterAmendCheck->setToolTip(
+            tr("Configure a remote (Repository → Configure remotes…) to enable push."));
+    } else if (!currentBranch.hasUpstream()) {
+        pushAfterAmendCheck->setToolTip(
+            tr("Publish the branch first (First publish…) to set an upstream."));
+    } else if (likelyPushed) {
+        pushAfterAmendCheck->setToolTip(
+            tr("Uses git push --force-with-lease because the amended commit replaces the one on "
+               "the remote."));
+    }
+    layout->addWidget(pushAfterAmendCheck);
+
+    const auto syncMessageEditor = [keepMessageCheck, messageEdit]() {
+        messageEdit->setEnabled(!keepMessageCheck->isChecked());
+    };
+    connect(keepMessageCheck, &QCheckBox::toggled, &dialog, syncMessageEditor);
+    syncMessageEditor();
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const bool keepMessage = keepMessageCheck->isChecked();
+    const QString message = messageEdit->toPlainText().trimmed();
+    if (!keepMessage && message.isEmpty()) {
+        QMessageBox::warning(this, tr("Amend commit"), tr("Commit message cannot be empty."));
+        return;
+    }
+
+    if (!m_git.hasUserIdentity(m_repo.path())) {
+        if (!promptGitIdentity(tr("Author identity is not configured yet."))) {
+            return;
+        }
+    }
+
+    if (dirty) {
+        if (stageAllRadio && stageAllRadio->isChecked()) {
+            const GitProcessResult stageResult = m_git.stageAll(m_repo.path());
+            if (!stageResult.success()) {
+                QMessageBox::critical(this, tr("Amend commit"), m_git.lastError());
+                return;
+            }
+        } else if (!m_git.hasStagedChanges(m_repo.path())) {
+            QMessageBox::warning(
+                this, tr("Amend commit"),
+                tr("Nothing is staged. Stage changes first or use \"Stage all\"."));
+            return;
+        }
+    } else if (keepMessage) {
+        QMessageBox::information(
+            this, tr("Amend commit"),
+            tr("There are no changes to include and the commit message is unchanged."));
+        return;
+    }
+
+    auto amendOnce = [&]() { return m_git.amendCommit(m_repo.path(), message, keepMessage); };
+
+    GitProcessResult amendResult = amendOnce();
+    if (!amendResult.success() && GitService::isCommitIdentityError(amendResult)) {
+        if (promptGitIdentity(tr("Git could not determine the commit author."))) {
+            amendResult = amendOnce();
+        }
+    }
+    if (!amendResult.success()) {
+        QStringList parts;
+        for (const QString &part :
+             {m_git.lastError(), amendResult.stderrText.trimmed(), amendResult.stdoutText.trimmed()}) {
+            if (!part.isEmpty()) {
+                parts << part;
+            }
+        }
+        QMessageBox::critical(this, tr("Amend commit failed"), parts.join(QStringLiteral("\n\n")));
+        return;
+    }
+
+    if (pushAfterAmendCheck->isChecked()) {
+        settings.setValue(QStringLiteral("ui/pushAfterCommit"), true);
+    }
+
+    const QString output = amendResult.stdoutText.trimmed();
+    QString resultMessage =
+        output.isEmpty() ? tr("Last commit amended successfully.") : output;
+
+    if (pushAfterAmendCheck->isChecked()) {
+        QString remote;
+        const int slash = currentBranch.upstream.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            remote = currentBranch.upstream.left(slash);
+        }
+        const QStringList remoteList = m_git.remotes(m_repo.path());
+        if (!remote.isEmpty() && remoteList.contains(remote)
+            && executePush(currentBranch, remote, false,
+                           likelyPushed ? tr("Force push after amend failed")
+                                        : tr("Push after amend failed"),
+                           likelyPushed)) {
+            resultMessage += QLatin1Char('\n')
+                              + (likelyPushed
+                                     ? tr("Changes were force-pushed to %1.")
+                                           .arg(currentBranch.upstream)
+                                     : tr("Changes were pushed to %1.").arg(currentBranch.upstream));
+        }
+    }
+
+    QMessageBox::information(this, tr("Amend commit"), resultMessage);
+
+    if (!currentBranch.name.isEmpty() && !currentBranch.isRemote
+        && !GitService::isPseudoDetachedBranchName(currentBranch.name)) {
+        m_branchFilter = currentBranch.name;
+    }
+    refreshRepository();
+}
+
 void MainWindow::discardAllChanges()
 {
     if (!m_repo.isValid()) {
@@ -1087,6 +1307,114 @@ void MainWindow::discardFileChanges(const QStringList &paths)
     QTimer::singleShot(0, this, &MainWindow::refreshRepository);
 }
 
+void MainWindow::stageFileChanges(const QStringList &paths)
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    QStringList uniquePaths;
+    for (const QString &path : paths) {
+        if (!path.isEmpty() && !uniquePaths.contains(path)) {
+            uniquePaths.append(path);
+        }
+    }
+    if (uniquePaths.isEmpty()) {
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    QStringList conflictedPaths;
+    for (const QString &path : uniquePaths) {
+        if (conflicts.contains(path)) {
+            conflictedPaths.append(path);
+        }
+    }
+    if (!conflictedPaths.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Stage files"),
+            tr("Cannot stage files with merge conflicts:\n%1")
+                .arg(conflictedPaths.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.stagePaths(m_repo.path(), uniquePaths);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Stage failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        refreshWorkingTree();
+        return;
+    }
+
+    refreshWorkingTree();
+}
+
+void MainWindow::unstageFileChanges(const QStringList &paths)
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    QStringList uniquePaths;
+    for (const QString &path : paths) {
+        if (!path.isEmpty() && !uniquePaths.contains(path)) {
+            uniquePaths.append(path);
+        }
+    }
+    if (uniquePaths.isEmpty()) {
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.unstagePaths(m_repo.path(), uniquePaths);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Unstage failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        refreshWorkingTree();
+        return;
+    }
+
+    refreshWorkingTree();
+}
+
+void MainWindow::stageAllChanges()
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    if (!m_git.hasUncommittedChanges(m_repo.path())) {
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Stage all"),
+            tr("Cannot stage changes while merge conflicts are unresolved:\n%1")
+                .arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.stageAll(m_repo.path());
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Stage all failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        refreshWorkingTree();
+        return;
+    }
+
+    refreshWorkingTree();
+}
+
 void MainWindow::addPathToGitignore(const QString &path)
 {
     if (!m_repo.isValid()) {
@@ -1144,6 +1472,10 @@ void MainWindow::updateWorkingTreeActions()
     if (m_commitAction) {
         m_commitAction->setEnabled(repoOpen && dirty);
     }
+    const bool canAmend = repoOpen && m_git.hasCommits(m_repo.path());
+    if (m_amendAction) {
+        m_amendAction->setEnabled(canAmend);
+    }
     if (m_discardAllAction) {
         m_discardAllAction->setEnabled(repoOpen && dirty);
     }
@@ -1151,6 +1483,7 @@ void MainWindow::updateWorkingTreeActions()
         m_discardFileAction->setEnabled(repoOpen && dirty && m_workingPanel->hasSelectedChange());
     }
     m_workingPanel->setCommitEnabled(repoOpen);
+    m_workingPanel->setAmendEnabled(canAmend);
 }
 
 void MainWindow::updateRepoLabel()
@@ -1704,7 +2037,7 @@ bool MainWindow::ensureRemoteAuthentication(const QString &remote, const QString
 }
 
 bool MainWindow::executePush(const Branch &branch, const QString &remote, bool setUpstream,
-                             const QString &failureTitle)
+                             const QString &failureTitle, bool forceWithLease)
 {
     if (!ensureRemoteAuthentication(remote)) {
         return false;
@@ -1712,7 +2045,7 @@ bool MainWindow::executePush(const Branch &branch, const QString &remote, bool s
 
     auto runPush = [&]() -> GitProcessResult {
         return setUpstream ? m_git.publishBranch(m_repo.path(), branch.name, remote)
-                           : m_git.pushBranch(m_repo.path(), branch.name, remote);
+                           : m_git.pushBranch(m_repo.path(), branch.name, remote, forceWithLease);
     };
 
     GitProcessResult result = runPush();

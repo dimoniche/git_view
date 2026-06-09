@@ -63,6 +63,8 @@ public:
     bool hasStagedChanges(const QString &repoPath) const;
 
     GitProcessResult stageAll(const QString &repoPath) const;
+    GitProcessResult stagePaths(const QString &repoPath, const QStringList &paths) const;
+    GitProcessResult unstagePaths(const QString &repoPath, const QStringList &paths) const;
     QString configValue(const QString &repoPath, const QString &key) const;
     bool hasUserIdentity(const QString &repoPath) const;
     static bool isCommitIdentityError(const GitProcessResult &result);
@@ -80,6 +82,11 @@ public:
                                             const QString &username,
                                             const QString &password) const;
     GitProcessResult commit(const QString &repoPath, const QString &message) const;
+    GitProcessResult amendCommit(const QString &repoPath,
+                                 const QString &message,
+                                 bool noEdit = false) const;
+    bool hasCommits(const QString &repoPath) const;
+    QString headCommitMessage(const QString &repoPath) const;
     GitProcessResult discardAllChanges(const QString &repoPath) const;
     GitProcessResult discardFileChanges(const QString &repoPath,
                                       const WorkingTreeChange &change) const;
@@ -115,7 +122,8 @@ public:
                                    const QString &remote) const;
     GitProcessResult pushBranch(const QString &repoPath,
                                 const QString &branchName,
-                                const QString &remote) const;
+                                const QString &remote,
+                                bool forceWithLease = false) const;
     GitProcessResult pullBranch(const QString &repoPath,
                                 const QString &remote,
                                 const QString &branchName) const;

@@ -547,6 +547,62 @@ GitProcessResult GitService::stageAll(const QString &repoPath) const
     return result;
 }
 
+GitProcessResult GitService::stagePaths(const QString &repoPath, const QStringList &paths) const
+{
+    m_lastError.clear();
+
+    QStringList gitPaths;
+    for (const QString &statusPath : paths) {
+        if (statusPath.trimmed().isEmpty()) {
+            continue;
+        }
+        gitPaths.append(pathsForDiff(statusPath));
+    }
+    gitPaths = uniquePaths(gitPaths);
+    if (gitPaths.isEmpty()) {
+        m_lastError = QStringLiteral("No file paths to stage");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    QStringList args{QStringLiteral("add"), QStringLiteral("--")};
+    args.append(gitPaths);
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git add failed"), result);
+    }
+    return result;
+}
+
+GitProcessResult GitService::unstagePaths(const QString &repoPath, const QStringList &paths) const
+{
+    m_lastError.clear();
+
+    QStringList gitPaths;
+    for (const QString &statusPath : paths) {
+        if (statusPath.trimmed().isEmpty()) {
+            continue;
+        }
+        gitPaths.append(pathsForDiff(statusPath));
+    }
+    gitPaths = uniquePaths(gitPaths);
+    if (gitPaths.isEmpty()) {
+        m_lastError = QStringLiteral("No file paths to unstage");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    QStringList args{QStringLiteral("restore"), QStringLiteral("--staged"), QStringLiteral("--")};
+    args.append(gitPaths);
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git restore --staged failed"), result);
+    }
+    return result;
+}
+
 GitProcessResult GitService::discardAllChanges(const QString &repoPath) const
 {
     m_lastError.clear();
@@ -1088,7 +1144,8 @@ GitProcessResult GitService::publishBranch(const QString &repoPath,
 
 GitProcessResult GitService::pushBranch(const QString &repoPath,
                                         const QString &branchName,
-                                        const QString &remote) const
+                                        const QString &remote,
+                                        bool forceWithLease) const
 {
     m_lastError.clear();
 
@@ -1101,8 +1158,13 @@ GitProcessResult GitService::pushBranch(const QString &repoPath,
         return result;
     }
 
-    const GitProcessResult result =
-        m_runner.run(repoPath, {QStringLiteral("push"), trimmedRemote, trimmedBranch});
+    QStringList args{QStringLiteral("push")};
+    if (forceWithLease) {
+        args << QStringLiteral("--force-with-lease");
+    }
+    args << trimmedRemote << trimmedBranch;
+
+    const GitProcessResult result = m_runner.run(repoPath, args);
     if (!result.success()) {
         setError(QStringLiteral("git push failed"), result);
     }
@@ -1386,6 +1448,60 @@ GitProcessResult GitService::commit(const QString &repoPath, const QString &mess
         setError(QStringLiteral("git commit failed"), result);
     }
     return result;
+}
+
+GitProcessResult GitService::amendCommit(const QString &repoPath,
+                                         const QString &message,
+                                         bool noEdit) const
+{
+    m_lastError.clear();
+
+    QStringList args{QStringLiteral("commit"), QStringLiteral("--amend")};
+    if (noEdit) {
+        args << QStringLiteral("--no-edit");
+    } else {
+        const QString trimmed = message.trimmed();
+        if (trimmed.isEmpty()) {
+            m_lastError = QStringLiteral("Commit message is empty");
+            GitProcessResult result;
+            result.exitCode = 1;
+            return result;
+        }
+        args << QStringLiteral("-m") << trimmed;
+    }
+
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git commit --amend failed"), result);
+    }
+    return result;
+}
+
+bool GitService::hasCommits(const QString &repoPath) const
+{
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                                QStringLiteral("HEAD")});
+    return result.success();
+}
+
+QString GitService::headCommitMessage(const QString &repoPath) const
+{
+    m_lastError.clear();
+
+    const GitProcessResult result = m_runner.run(
+        repoPath, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%B"),
+                   QStringLiteral("HEAD")});
+    if (!result.success()) {
+        setError(QStringLiteral("git log failed"), result);
+        return {};
+    }
+
+    QString message = result.stdoutText;
+    while (message.endsWith(QLatin1Char('\n'))) {
+        message.chop(1);
+    }
+    return message;
 }
 
 CommitDetails GitService::commitDetails(const QString &repoPath, const QString &hash) const

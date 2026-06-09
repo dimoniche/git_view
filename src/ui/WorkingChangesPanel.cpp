@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QFont>
@@ -110,6 +111,34 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
     makeCompactToolButton(m_commitButton);
     actionsRow->addWidget(m_commitButton);
 
+    m_amendButton = new QPushButton(tr("Amend…"), this);
+    m_amendButton->setEnabled(false);
+    m_amendButton->setToolTip(tr("Amend the last commit (git commit --amend)"));
+    connect(m_amendButton, &QPushButton::clicked, this, &WorkingChangesPanel::amendRequested);
+    makeCompactToolButton(m_amendButton);
+    actionsRow->addWidget(m_amendButton);
+
+    m_stageButton = new QPushButton(tr("Stage"), this);
+    m_stageButton->setEnabled(false);
+    m_stageButton->setToolTip(tr("Stage selected files (git add)"));
+    connect(m_stageButton, &QPushButton::clicked, this, &WorkingChangesPanel::onStageFilesClicked);
+    makeCompactToolButton(m_stageButton);
+    actionsRow->addWidget(m_stageButton);
+
+    m_unstageButton = new QPushButton(tr("Unstage"), this);
+    m_unstageButton->setEnabled(false);
+    m_unstageButton->setToolTip(tr("Unstage selected files (git restore --staged)"));
+    connect(m_unstageButton, &QPushButton::clicked, this, &WorkingChangesPanel::onUnstageFilesClicked);
+    makeCompactToolButton(m_unstageButton);
+    actionsRow->addWidget(m_unstageButton);
+
+    m_stageAllButton = new QPushButton(tr("Stage all"), this);
+    m_stageAllButton->setEnabled(false);
+    m_stageAllButton->setToolTip(tr("Stage all changes (git add -A)"));
+    connect(m_stageAllButton, &QPushButton::clicked, this, &WorkingChangesPanel::onStageAllClicked);
+    makeCompactToolButton(m_stageAllButton);
+    actionsRow->addWidget(m_stageAllButton);
+
     m_discardFileButton = new QPushButton(tr("Discard file…"), this);
     m_discardFileButton->setEnabled(false);
     connect(m_discardFileButton, &QPushButton::clicked, this,
@@ -139,6 +168,7 @@ WorkingChangesPanel::WorkingChangesPanel(QWidget *parent)
             &WorkingChangesPanel::onFileSelectionChanged);
     connect(m_filesTree, &QTreeWidget::itemSelectionChanged, this,
             &WorkingChangesPanel::updateDiscardFileButton);
+    connect(m_filesTree, &QTreeWidget::itemSelectionChanged, this, &WorkingChangesPanel::updateStageButtons);
     connect(m_filesTree, &QTreeWidget::itemActivated, this,
             &WorkingChangesPanel::onFileDoubleClicked);
     connect(m_filesTree, &QWidget::customContextMenuRequested, this,
@@ -192,8 +222,16 @@ void WorkingChangesPanel::setCommitEnabled(bool enabled)
 {
     m_repoActionsEnabled = enabled;
     updateCommitButton();
+    updateAmendButton();
     updateDiscardAllButton();
     updateDiscardFileButton();
+    updateStageButtons();
+}
+
+void WorkingChangesPanel::setAmendEnabled(bool enabled)
+{
+    m_amendEnabled = enabled;
+    updateAmendButton();
 }
 
 void WorkingChangesPanel::updateCommitButton()
@@ -204,12 +242,73 @@ void WorkingChangesPanel::updateCommitButton()
     m_commitButton->setEnabled(m_repoActionsEnabled && !m_allChanges.empty());
 }
 
+void WorkingChangesPanel::updateAmendButton()
+{
+    if (!m_amendButton) {
+        return;
+    }
+    m_amendButton->setEnabled(m_amendEnabled);
+}
+
 void WorkingChangesPanel::updateDiscardAllButton()
 {
     if (!m_discardAllButton) {
         return;
     }
     m_discardAllButton->setEnabled(m_repoActionsEnabled && !m_allChanges.empty());
+}
+
+void WorkingChangesPanel::selectedPathsByScope(QStringList *stagedSectionPaths,
+                                               QStringList *changesSectionPaths) const
+{
+    if (!stagedSectionPaths || !changesSectionPaths) {
+        return;
+    }
+    stagedSectionPaths->clear();
+    changesSectionPaths->clear();
+
+    for (const QTreeWidgetItem *item : selectedFileItems()) {
+        const QString path = item->data(0, PathRole).toString();
+        if (path.isEmpty()) {
+            continue;
+        }
+        const auto scope = static_cast<WorkingDiffScope>(item->data(0, ScopeRole).toInt());
+        if (scope == WorkingDiffScope::Staged) {
+            if (!stagedSectionPaths->contains(path)) {
+                stagedSectionPaths->append(path);
+            }
+        } else if (!changesSectionPaths->contains(path)) {
+            changesSectionPaths->append(path);
+        }
+    }
+}
+
+void WorkingChangesPanel::updateStageButtons()
+{
+    QStringList stagedPaths;
+    QStringList changesPaths;
+    selectedPathsByScope(&stagedPaths, &changesPaths);
+
+    const bool hasChanges = m_repoActionsEnabled && !m_allChanges.empty();
+    if (m_stageAllButton) {
+        m_stageAllButton->setEnabled(hasChanges);
+    }
+    if (m_stageButton) {
+        m_stageButton->setEnabled(hasChanges && !changesPaths.isEmpty());
+        if (changesPaths.size() > 1) {
+            m_stageButton->setText(tr("Stage %1").arg(changesPaths.size()));
+        } else {
+            m_stageButton->setText(tr("Stage"));
+        }
+    }
+    if (m_unstageButton) {
+        m_unstageButton->setEnabled(hasChanges && !stagedPaths.isEmpty());
+        if (stagedPaths.size() > 1) {
+            m_unstageButton->setText(tr("Unstage %1").arg(stagedPaths.size()));
+        } else {
+            m_unstageButton->setText(tr("Unstage"));
+        }
+    }
 }
 
 bool WorkingChangesPanel::isStagedEntry(const WorkingTreeChange &change) const
@@ -283,6 +382,33 @@ void WorkingChangesPanel::onDiscardFileClicked()
 void WorkingChangesPanel::onDiscardAllClicked()
 {
     emit discardAllRequested();
+}
+
+void WorkingChangesPanel::onStageFilesClicked()
+{
+    QStringList stagedPaths;
+    QStringList changesPaths;
+    selectedPathsByScope(&stagedPaths, &changesPaths);
+    if (changesPaths.isEmpty()) {
+        return;
+    }
+    emit stageFilesRequested(changesPaths);
+}
+
+void WorkingChangesPanel::onUnstageFilesClicked()
+{
+    QStringList stagedPaths;
+    QStringList changesPaths;
+    selectedPathsByScope(&stagedPaths, &changesPaths);
+    if (stagedPaths.isEmpty()) {
+        return;
+    }
+    emit unstageFilesRequested(stagedPaths);
+}
+
+void WorkingChangesPanel::onStageAllClicked()
+{
+    emit stageAllRequested();
 }
 
 QString WorkingChangesPanel::selectedFilePath() const
@@ -362,6 +488,21 @@ void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
             this, &WorkingChangesPanel::onDiscardFileClicked);
         discardFileAction->setEnabled(m_discardFileButton && m_discardFileButton->isEnabled());
 
+        QStringList stagedPaths;
+        QStringList changesPaths;
+        selectedPathsByScope(&stagedPaths, &changesPaths);
+        if (!changesPaths.isEmpty()) {
+            menu.addAction(changesPaths.size() > 1 ? tr("Stage %1 files").arg(changesPaths.size())
+                                                   : tr("Stage"),
+                           this, [this, changesPaths]() { emit stageFilesRequested(changesPaths); });
+        }
+        if (!stagedPaths.isEmpty()) {
+            menu.addAction(stagedPaths.size() > 1 ? tr("Unstage %1 files").arg(stagedPaths.size())
+                                                  : tr("Unstage"),
+                           this,
+                           [this, stagedPaths]() { emit unstageFilesRequested(stagedPaths); });
+        }
+
         const bool inStaged = isStagedEntry(change);
         const bool inChanges = change.hasUnstaged() || change.isUntracked();
         if (inStaged && inChanges) {
@@ -406,6 +547,10 @@ void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
         menu.addAction(tr("Commit changes…"), this, [this]() { emit commitRequested(); });
     commitAction->setEnabled(m_commitButton && m_commitButton->isEnabled());
 
+    if (m_stageAllButton && m_stageAllButton->isEnabled()) {
+        menu.addAction(tr("Stage all"), this, &WorkingChangesPanel::onStageAllClicked);
+    }
+
     QAction *discardAllAction =
         menu.addAction(tr("Discard all changes…"), this, &WorkingChangesPanel::onDiscardAllClicked);
     discardAllAction->setEnabled(m_discardAllButton && m_discardAllButton->isEnabled());
@@ -424,6 +569,7 @@ void WorkingChangesPanel::refresh()
         updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
+        updateStageButtons();
         return;
     }
 
@@ -434,6 +580,7 @@ void WorkingChangesPanel::refresh()
         updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
+        updateStageButtons();
         return;
     }
 
@@ -446,6 +593,7 @@ void WorkingChangesPanel::refresh()
         updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
+        updateStageButtons();
         return;
     }
 
@@ -529,6 +677,7 @@ void WorkingChangesPanel::rebuildChangeTree()
         updateCommitButton();
         updateDiscardAllButton();
         updateDiscardFileButton();
+        updateStageButtons();
         return;
     }
 
@@ -574,6 +723,7 @@ void WorkingChangesPanel::rebuildChangeTree()
     updateCommitButton();
     updateDiscardAllButton();
     updateDiscardFileButton();
+    updateStageButtons();
 
     if (selectedFileItem()) {
         loadDiffForCurrentFile();
@@ -584,6 +734,7 @@ void WorkingChangesPanel::onFileSelectionChanged()
 {
     loadDiffForCurrentFile();
     updateDiscardFileButton();
+    updateStageButtons();
     emit fileSelectionChanged();
 }
 
