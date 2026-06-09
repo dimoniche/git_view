@@ -160,6 +160,43 @@ QString credentialPasswordFromOutput(const QString &output)
 
 } // namespace
 
+bool GitService::isBinaryDiffOutput(const QString &text)
+{
+    if (text.isEmpty()) {
+        return false;
+    }
+
+    for (const QString &line : text.split(QLatin1Char('\n'))) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.startsWith(QStringLiteral("Binary files "))
+            && trimmed.endsWith(QStringLiteral(" differ"))) {
+            return true;
+        }
+        if (trimmed.startsWith(QStringLiteral("GIT binary patch"))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool GitService::isWorktreePathBinary(const QString &absolutePath)
+{
+    QFile file(absolutePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    return file.read(8192).contains('\0');
+}
+
+QString GitService::acceptDiffOutput(const QString &diff) const
+{
+    if (isBinaryDiffOutput(diff)) {
+        m_lastDiffIsBinary = true;
+        return {};
+    }
+    return diff;
+}
+
 GitService::GitService(GitProcessRunner runner)
     : m_runner(std::move(runner))
 {
@@ -1481,7 +1518,7 @@ QString GitService::runDiffCommand(const QString &repoPath, const QStringList &a
 
     const GitProcessResult result = m_runner.run(repoPath, args);
     if (!result.stdoutText.trimmed().isEmpty()) {
-        return result.stdoutText;
+        return acceptDiffOutput(result.stdoutText);
     }
     if (!result.diffSucceeded()) {
         setError(QStringLiteral("git diff failed"), result);
@@ -1505,12 +1542,18 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
 
     auto tryCachedForPath = [&](const QString &diffPath) -> QString {
         QStringList args{QStringLiteral("diff"), QStringLiteral("--no-ext-diff"),
-                         QStringLiteral("--text"), QStringLiteral("-U3"),
-                         QStringLiteral("--cached"), QStringLiteral("--"), diffPath};
+                         QStringLiteral("-U3"), QStringLiteral("--cached"),
+                         QStringLiteral("--"), diffPath};
         recordCommand(args);
         const GitProcessResult result = m_runner.run(repoPath, args);
         if (result.diffSucceeded() && !result.stdoutText.trimmed().isEmpty()) {
-            return result.stdoutText;
+            const QString patch = acceptDiffOutput(result.stdoutText);
+            if (!patch.isEmpty()) {
+                return patch;
+            }
+            if (m_lastDiffIsBinary) {
+                return {};
+            }
         }
         m_lastError.clear();
         return {};
@@ -1520,6 +1563,9 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
         const QString patch = tryCachedForPath(diffPath);
         if (!patch.isEmpty()) {
             return patch;
+        }
+        if (m_lastDiffIsBinary) {
+            return {};
         }
     }
 
@@ -1535,26 +1581,34 @@ QString GitService::stagedDiffForPath(const QString &repoPath, const QString &pa
             recordCommand(args);
             const GitProcessResult colon = m_runner.run(repoPath, args);
             if (colon.diffSucceeded() && !colon.stdoutText.trimmed().isEmpty()) {
-                return colon.stdoutText;
+                const QString patch = acceptDiffOutput(colon.stdoutText);
+                if (!patch.isEmpty()) {
+                    return patch;
+                }
+                if (m_lastDiffIsBinary) {
+                    return {};
+                }
             }
             m_lastError.clear();
+            if (m_lastDiffIsBinary) {
+                return {};
+            }
         }
     }
 
     QStringList fullArgs{QStringLiteral("diff"), QStringLiteral("--no-ext-diff"),
-                         QStringLiteral("--text"), QStringLiteral("-U3"),
-                         QStringLiteral("--cached")};
+                         QStringLiteral("-U3"), QStringLiteral("--cached")};
     recordCommand(fullArgs);
     const GitProcessResult full = m_runner.run(repoPath, fullArgs);
     if (full.diffSucceeded() && !full.stdoutText.trimmed().isEmpty()) {
         const QString extracted = DiffParser::extractFilePatch(full.stdoutText, normalizedPath);
         if (!extracted.isEmpty()) {
-            return extracted;
+            return acceptDiffOutput(extracted);
         }
         for (const QString &diffPath : diffPaths) {
             const QString byPath = DiffParser::extractFilePatch(full.stdoutText, diffPath);
             if (!byPath.isEmpty()) {
-                return byPath;
+                return acceptDiffOutput(byPath);
             }
         }
     }
@@ -1569,6 +1623,7 @@ QString GitService::workingTreeFileDiff(const QString &repoPath,
 {
     m_lastError.clear();
     m_lastDiffCommand.clear();
+    m_lastDiffIsBinary = false;
 
     const QString normalizedPath = gitPathInRepo(repoPath, path);
     if (normalizedPath.isEmpty()) {
@@ -1579,7 +1634,7 @@ QString GitService::workingTreeFileDiff(const QString &repoPath,
 
     auto runDiff = [&](const QStringList &extraArgs, const QStringList &paths) -> QString {
         QStringList args{QStringLiteral("diff"), QStringLiteral("--no-ext-diff"),
-                         QStringLiteral("--text"), QStringLiteral("--unified=3")};
+                         QStringLiteral("--unified=3")};
         args << extraArgs;
         if (!paths.isEmpty()) {
             args << QStringLiteral("--") << paths;
@@ -1601,6 +1656,11 @@ QString GitService::workingTreeFileDiff(const QString &repoPath,
 
     if (change.isUntracked()) {
         const QString absPath = QDir(repoPath).filePath(diffPaths.front());
+        if (isWorktreePathBinary(absPath)) {
+            m_lastDiffIsBinary = true;
+            return {};
+        }
+
         m_lastDiffCommand.clear();
         QStringList args;
         args << QStringLiteral("diff") << QStringLiteral("--unified=3") << QStringLiteral("--no-index")
@@ -1611,7 +1671,7 @@ QString GitService::workingTreeFileDiff(const QString &repoPath,
             setError(QStringLiteral("git diff failed"), result);
             return {};
         }
-        return result.stdoutText;
+        return acceptDiffOutput(result.stdoutText);
     }
 
     return runDiff({}, diffPaths);
@@ -1622,6 +1682,7 @@ QString GitService::commitFileDiff(const QString &repoPath,
                                    const QString &path) const
 {
     m_lastError.clear();
+    m_lastDiffIsBinary = false;
 
     const QString gitPath = gitPathInRepo(repoPath, path);
     if (gitPath.isEmpty()) {
@@ -1636,11 +1697,13 @@ QString GitService::commitFileDiff(const QString &repoPath,
         return {};
     }
 
-    QString diff = result.stdoutText;
-    if (diff.isEmpty() && result.stderrText.contains(QStringLiteral("Binary files"))) {
-        diff = result.stderrText.trimmed();
+    if (isBinaryDiffOutput(result.stdoutText)
+        || result.stderrText.contains(QStringLiteral("Binary files"), Qt::CaseInsensitive)
+        || result.stderrText.contains(QStringLiteral("binary file"), Qt::CaseInsensitive)) {
+        m_lastDiffIsBinary = true;
+        return {};
     }
-    return diff;
+    return result.stdoutText;
 }
 
 std::vector<Commit> GitService::logFileHistory(const QString &repoPath, const QString &path) const
@@ -1702,7 +1765,6 @@ WorkingFileContent GitService::workingTreeFileContent(const QString &repoPath,
             || showResult.stderrText.contains(QStringLiteral("binary file"), Qt::CaseInsensitive)) {
             blob.ok = true;
             blob.binary = true;
-            blob.content = showResult.stderrText.trimmed();
             return blob;
         }
         if (!showResult.success()) {
@@ -1719,6 +1781,11 @@ WorkingFileContent GitService::workingTreeFileContent(const QString &repoPath,
             if (blob.error.isEmpty()) {
                 blob.error = QStringLiteral("git show failed");
             }
+            return blob;
+        }
+        if (showResult.stdoutText.contains(QChar::Null)) {
+            blob.ok = true;
+            blob.binary = true;
             return blob;
         }
         blob.ok = true;
@@ -1742,7 +1809,6 @@ WorkingFileContent GitService::workingTreeFileContent(const QString &repoPath,
         if (bytes.contains('\0')) {
             file.ok = true;
             file.binary = true;
-            file.content = QStringLiteral("Binary file (%1 bytes).").arg(bytes.size());
             return file;
         }
         file.ok = true;
@@ -1825,11 +1891,15 @@ WorkingFileContent GitService::commitFileContent(const QString &repoPath,
             || showResult.stderrText.contains(QStringLiteral("binary file"), Qt::CaseInsensitive)) {
             blob.ok = true;
             blob.binary = true;
-            blob.content = showResult.stderrText.trimmed();
             return blob;
         }
         if (!showResult.success()) {
             blob.missing = true;
+            return blob;
+        }
+        if (showResult.stdoutText.contains(QChar::Null)) {
+            blob.ok = true;
+            blob.binary = true;
             return blob;
         }
         blob.ok = true;

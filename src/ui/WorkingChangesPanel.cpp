@@ -2,6 +2,7 @@
 
 #include "core/WorkingTreeChange.h"
 #include "git/GitService.h"
+#include "ui/DiffDisplay.h"
 #include "ui/DiffViewerDialog.h"
 
 #include <QAbstractItemView>
@@ -75,7 +76,7 @@ QString fileContentText(const WorkingFileContent &content, const QString &missin
                         const QString &binaryLabel)
 {
     if (content.binary) {
-        return content.content.isEmpty() ? binaryLabel : content.content;
+        return binaryLabel;
     }
     if (content.missing) {
         return missingLabel;
@@ -638,6 +639,11 @@ void WorkingChangesPanel::loadDiffForCurrentFile()
 
     const QString diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
 
+    if (m_git->lastDiffWasBinary()) {
+        showDiffText(binaryDiffUserMessage(this), m_diffTitle->text());
+        return;
+    }
+
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
         showDiffText(m_git->lastError(), m_diffTitle->text());
         return;
@@ -744,6 +750,11 @@ void WorkingChangesPanel::showFileDiffInWindowImpl(const QString &repoRelativePa
 
     const QString title = tr("%1 — %2").arg(sectionLabel, path);
     const QString diff = m_git->workingTreeFileDiff(m_repoPath, path, scope, change);
+
+    if (m_git->lastDiffWasBinary()) {
+        DiffViewerDialog::showDiff(window(), title, binaryDiffUserMessage(this));
+        return;
+    }
 
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
         DiffViewerDialog::showDiff(window(), title, m_git->lastError());

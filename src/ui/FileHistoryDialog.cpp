@@ -1,5 +1,6 @@
 #include "ui/FileHistoryDialog.h"
 
+#include "ui/DiffDisplay.h"
 #include "ui/TopLevelDialogUtils.h"
 
 #include "git/GitService.h"
@@ -24,7 +25,7 @@ QString fileContentText(const WorkingFileContent &content, const QString &missin
                         const QString &binaryLabel)
 {
     if (content.binary) {
-        return content.content.isEmpty() ? binaryLabel : content.content;
+        return binaryLabel;
     }
     if (content.missing) {
         return missingLabel;
@@ -136,6 +137,11 @@ void FileHistoryDialog::loadDiffForCommit(const QString &hash)
     }
 
     const QString diff = m_git->commitFileDiff(m_repoPath, hash, m_filePath);
+    if (m_git->lastDiffWasBinary()) {
+        m_diffViewer->clear();
+        m_diffViewer->setDiff(binaryDiffUserMessage(this));
+        return;
+    }
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
         m_diffViewer->clear();
         m_diffViewer->setDiff(m_git->lastError());

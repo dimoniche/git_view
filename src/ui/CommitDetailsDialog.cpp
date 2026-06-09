@@ -1,6 +1,7 @@
 #include "ui/CommitDetailsDialog.h"
 
 #include "ui/DialogTitleBar.h"
+#include "ui/DiffDisplay.h"
 #include "ui/DiffViewerDialog.h"
 #include "ui/DiffViewerWidget.h"
 #include "ui/FileHistoryDialog.h"
@@ -27,7 +28,7 @@ QString fileContentText(const WorkingFileContent &content, const QString &missin
                         const QString &binaryLabel)
 {
     if (content.binary) {
-        return content.content.isEmpty() ? binaryLabel : content.content;
+        return binaryLabel;
     }
     if (content.missing) {
         return missingLabel;
@@ -191,6 +192,11 @@ void CommitDetailsDialog::loadDiffForFile(const QString &path)
     m_diffViewer->setSourceFilePath(path);
 
     const QString diff = m_git->commitFileDiff(m_repoPath, m_details.commit.hash, path);
+    if (m_git->lastDiffWasBinary()) {
+        m_diffViewer->clear();
+        m_diffViewer->setDiff(binaryDiffUserMessage(this));
+        return;
+    }
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
         m_diffViewer->clear();
         m_diffViewer->setDiff(m_git->lastError());
@@ -272,6 +278,10 @@ void CommitDetailsDialog::openDiffInSeparateWindow(const QString &path)
 
     const QString title = tr("Diff: %1").arg(path);
     const QString diff = m_git->commitFileDiff(m_repoPath, m_details.commit.hash, path);
+    if (m_git->lastDiffWasBinary()) {
+        DiffViewerDialog::showDiff(this, title, binaryDiffUserMessage(this));
+        return;
+    }
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
         DiffViewerDialog::showDiff(this, title, m_git->lastError());
         return;

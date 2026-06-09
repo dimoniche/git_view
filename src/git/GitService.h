@@ -153,12 +153,17 @@ public:
 
     QString lastError() const { return m_lastError; }
     QString lastDiffCommand() const { return m_lastDiffCommand; }
+    bool lastDiffWasBinary() const { return m_lastDiffIsBinary; }
 
 private:
     QString stagedDiffForPath(const QString &repoPath, const QString &path) const;
     QString runDiffCommand(const QString &repoPath, const QStringList &args) const;
+    QString acceptDiffOutput(const QString &diff) const;
+    static bool isBinaryDiffOutput(const QString &text);
+    static bool isWorktreePathBinary(const QString &absolutePath);
 
     mutable QString m_lastDiffCommand;
+    mutable bool m_lastDiffIsBinary = false;
 
     std::vector<Commit> runLog(const QString &repoPath,
                                const QStringList &extraArgs,
