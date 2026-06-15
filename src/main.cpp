@@ -1,4 +1,5 @@
 #include "AppLaunchOptions.h"
+#include "git_view_version.h"
 #include "git/GitService.h"
 #include "ui/MainWindow.h"
 
@@ -41,7 +42,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("git_view"));
     QApplication::setOrganizationName(QStringLiteral("git_view"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral(GIT_VIEW_VERSION));
 
     GitService git;
     const AppLaunchOptions options = AppLaunchOptions::parse(QCoreApplication::arguments(), &git);

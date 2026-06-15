@@ -3,6 +3,9 @@
 Minimal Git GUI for Linux (Ubuntu), focused on branch history and merge operations.
 Built with **Qt 6** and the system **git** CLI.
 
+Application version is defined in [`VERSION`](VERSION) (used by CMake and the running app).
+For Debian packages, bump the upstream part in `debian/changelog` to match.
+
 ## Requirements
 
 - CMake 3.16+

@@ -38,7 +38,10 @@ include(GNUInstallDirs)
 
 add_executable(git_view ${GIT_VIEW_SOURCES})
 
-target_include_directories(git_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(git_view PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${GIT_VIEW_GENERATED_DIR}
+)
 
 target_link_libraries(git_view PRIVATE Qt6::Widgets)
 
