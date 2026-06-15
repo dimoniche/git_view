@@ -26,3 +26,4 @@ debian/*.substvars
 ../*.buildinfo
 ../*.changes
 ../*.dsc
+obj-x86_64-linux-gnu
