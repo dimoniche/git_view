@@ -1,0 +1,3 @@
+#pragma once
+
+#define GIT_VIEW_VERSION "@GIT_VIEW_VERSION@"

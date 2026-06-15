@@ -1,6 +1,17 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(git_view VERSION 0.1.0 LANGUAGES CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" GIT_VIEW_VERSION)
+string(STRIP "${GIT_VIEW_VERSION}" GIT_VIEW_VERSION)
+
+project(git_view VERSION ${GIT_VIEW_VERSION} LANGUAGES C CXX)
+
+set(GIT_VIEW_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${GIT_VIEW_GENERATED_DIR}")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/git_view_version.h.in"
+    "${GIT_VIEW_GENERATED_DIR}/git_view_version.h"
+    @ONLY
+)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,7 +31,15 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
+if(UNIX)
+    add_subdirectory(third_party/libvterm)
+endif()
+
 add_subdirectory(src)
+
+if(UNIX AND NOT APPLE)
+    add_subdirectory(integrations)
+endif()
 
 option(GIT_VIEW_BUILD_TESTS "Build unit tests" ON)
 if(GIT_VIEW_BUILD_TESTS)

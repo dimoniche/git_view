@@ -2,12 +2,32 @@
 
 #include <QStringList>
 
+namespace {
+
+QString visualPorcelainChar(QChar status)
+{
+    if (status == QLatin1Char(' ')) {
+        return QStringLiteral("·");
+    }
+    return QString(status);
+}
+
+} // namespace
+
 QString WorkingTreeChange::statusLabel() const
 {
     if (isUntracked()) {
         return QStringLiteral("??");
     }
     return QString(indexStatus) + workTreeStatus;
+}
+
+QString WorkingTreeChange::porcelainStatusDisplay() const
+{
+    if (isUntracked()) {
+        return QStringLiteral("??");
+    }
+    return visualPorcelainChar(indexStatus) + visualPorcelainChar(workTreeStatus);
 }
 
 QString WorkingTreeChange::statusDescription() const

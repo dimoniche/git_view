@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/CommitDetails.h"
+#include "ui/DiffViewerDialog.h"
 
 #include <QString>
 
@@ -8,6 +9,7 @@
 
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
 class QPlainTextEdit;
 class GitService;
 
@@ -23,9 +25,14 @@ public:
 
 private slots:
     void onFileSelectionChanged();
+    void onFileDoubleClicked(QListWidgetItem *item);
+    void showFilesContextMenu(const QPoint &pos);
 
 private:
     void loadDiffForCurrentFile();
+    void openDiffInSeparateWindow();
+    void openFileHistoryInSeparateWindow(const QString &path);
+    DiffViewerSources buildSourcesForFile(const QString &path) const;
     void showDiffText(const QString &text, const QString &title);
 
     QString m_repoPath;

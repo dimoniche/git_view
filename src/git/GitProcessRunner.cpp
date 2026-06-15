@@ -31,24 +31,73 @@ GitProcessResult GitProcessRunner::run(const QString &repoPath,
     if (!repoPath.isEmpty()) {
         command << QStringLiteral("-C") << repoPath;
     }
-    command << args;
+    command << QStringLiteral("-c") << QStringLiteral("core.quotepath=false") << args;
 
     QProcess process;
-    process.setProgram(findGitExecutable());
-    process.setArguments(command);
     process.setProcessChannelMode(QProcess::SeparateChannels);
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
-    env.insert(QStringLiteral("LANG"), QStringLiteral("C"));
+    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C.UTF-8"));
+    env.insert(QStringLiteral("LANG"), QStringLiteral("C.UTF-8"));
+    env.insert(QStringLiteral("GIT_PAGER"), QString());
+    env.insert(QStringLiteral("GIT_TERMINAL_PROMPT"), QStringLiteral("0"));
     process.setProcessEnvironment(env);
 
-    process.start();
+    process.start(findGitExecutable(), command);
     if (!process.waitForStarted()) {
         result.stderrText =
             QStringLiteral("Failed to start git: %1").arg(process.errorString());
         return result;
     }
+
+    if (!process.waitForFinished(timeoutMs)) {
+        process.kill();
+        process.waitForFinished(5000);
+        result.stderrText = QStringLiteral("git timed out");
+        result.exitCode = -1;
+        return result;
+    }
+
+    result.exitCode = process.exitCode();
+    result.stdoutText = QString::fromUtf8(process.readAllStandardOutput());
+    result.stderrText = QString::fromUtf8(process.readAllStandardError());
+    return result;
+}
+
+GitProcessResult GitProcessRunner::runWithInput(const QString &repoPath,
+                                                const QStringList &args,
+                                                const QByteArray &stdinData,
+                                                int timeoutMs) const
+{
+    GitProcessResult result;
+
+    QStringList command;
+    if (!repoPath.isEmpty()) {
+        command << QStringLiteral("-C") << repoPath;
+    }
+    command << QStringLiteral("-c") << QStringLiteral("core.quotepath=false") << args;
+
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C.UTF-8"));
+    env.insert(QStringLiteral("LANG"), QStringLiteral("C.UTF-8"));
+    env.insert(QStringLiteral("GIT_PAGER"), QString());
+    env.insert(QStringLiteral("GIT_TERMINAL_PROMPT"), QStringLiteral("0"));
+    process.setProcessEnvironment(env);
+
+    process.start(findGitExecutable(), command);
+    if (!process.waitForStarted()) {
+        result.stderrText =
+            QStringLiteral("Failed to start git: %1").arg(process.errorString());
+        return result;
+    }
+
+    if (!stdinData.isEmpty()) {
+        process.write(stdinData);
+    }
+    process.closeWriteChannel();
 
     if (!process.waitForFinished(timeoutMs)) {
         process.kill();

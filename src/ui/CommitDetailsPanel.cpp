@@ -1,14 +1,41 @@
 #include "ui/CommitDetailsPanel.h"
 
+#include "git/DiffParser.h"
 #include "git/GitService.h"
 #include "ui/DiffHighlighter.h"
+#include "ui/DiffDisplay.h"
+#include "ui/DiffViewerDialog.h"
+#include "ui/FileHistoryDialog.h"
 
 #include <QFont>
+#include <QFontMetrics>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QVBoxLayout>
+
+namespace {
+
+QString fileContentText(const WorkingFileContent &content, const QString &missingLabel,
+                        const QString &binaryLabel)
+{
+    if (content.binary) {
+        return binaryLabel;
+    }
+    if (content.missing) {
+        return missingLabel;
+    }
+    if (content.ok) {
+        return content.content;
+    }
+    return content.error;
+}
+
+} // namespace
 
 CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     : QWidget(parent)
@@ -30,8 +57,13 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
 
     m_filesList = new QListWidget(filesWidget);
     m_filesList->setMinimumHeight(80);
+    m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_filesList, &QListWidget::currentRowChanged, this,
             &CommitDetailsPanel::onFileSelectionChanged);
+    connect(m_filesList, &QListWidget::itemActivated, this,
+            &CommitDetailsPanel::onFileDoubleClicked);
+    connect(m_filesList, &QWidget::customContextMenuRequested, this,
+            &CommitDetailsPanel::showFilesContextMenu);
     filesLayout->addWidget(m_filesList);
 
     splitter->addWidget(filesWidget);
@@ -46,7 +78,8 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     m_diffView = new QPlainTextEdit(diffWidget);
     m_diffView->setReadOnly(true);
     m_diffView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_diffView->setTabStopDistance(QFontMetrics(m_diffView->font()).horizontalAdvance(QLatin1Char(' ')) * 4);
+    m_diffView->setTabStopDistance(
+        QFontMetrics(m_diffView->font()).horizontalAdvance(QLatin1Char(' ')) * 4);
 
     QFont diffFont = m_diffView->font();
     diffFont.setStyleHint(QFont::Monospace);
@@ -57,8 +90,7 @@ CommitDetailsPanel::CommitDetailsPanel(QWidget *parent)
     diffFont.setFamily(QStringLiteral("Monospace"));
 #endif
     m_diffView->setFont(diffFont);
-
-    new DiffHighlighter(m_diffView->document());
+    new DiffHighlighter(m_diffView->document(), m_diffView);
     diffLayout->addWidget(m_diffView);
 
     splitter->addWidget(diffWidget);
@@ -122,6 +154,45 @@ void CommitDetailsPanel::onFileSelectionChanged()
     loadDiffForCurrentFile();
 }
 
+void CommitDetailsPanel::onFileDoubleClicked(QListWidgetItem *item)
+{
+    if (!item) {
+        return;
+    }
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+    m_filesList->setCurrentRow(m_filesList->row(item));
+    openDiffInSeparateWindow();
+}
+
+void CommitDetailsPanel::showFilesContextMenu(const QPoint &pos)
+{
+    QListWidgetItem *item = m_filesList->itemAt(pos);
+    if (!item) {
+        return;
+    }
+
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+
+    m_filesList->setCurrentRow(m_filesList->row(item));
+
+    QMenu menu(this);
+    menu.addAction(tr("Show full file history…"), this,
+                   [this, path]() { openFileHistoryInSeparateWindow(path); });
+    menu.addSeparator();
+    menu.addAction(tr("Copy path"), this, [path]() {
+        if (QClipboard *clipboard = QGuiApplication::clipboard()) {
+            clipboard->setText(path);
+        }
+    });
+    menu.exec(m_filesList->mapToGlobal(pos));
+}
+
 void CommitDetailsPanel::loadDiffForCurrentFile()
 {
     if (!m_git || m_repoPath.isEmpty() || m_commitHash.isEmpty()) {
@@ -144,6 +215,10 @@ void CommitDetailsPanel::loadDiffForCurrentFile()
     m_diffTitle->setText(tr("Diff: %1").arg(path));
 
     const QString diff = m_git->commitFileDiff(m_repoPath, m_commitHash, path);
+    if (m_git->lastDiffWasBinary()) {
+        showDiffText(binaryDiffUserMessage(this), m_diffTitle->text());
+        return;
+    }
     if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
         showDiffText(m_git->lastError(), m_diffTitle->text());
         return;
@@ -154,7 +229,78 @@ void CommitDetailsPanel::loadDiffForCurrentFile()
         return;
     }
 
-    showDiffText(diff, m_diffTitle->text());
+    const QString displayDiff = DiffParser::prepareDiffForDisplay(diff);
+    if (!DiffParser::shouldSkipExpensiveDiffProcessing(diff)
+        && DiffParser::diffShowsNoContentChange(displayDiff)) {
+        showDiffText(equivalentContentDespiteDiffMessage(this), m_diffTitle->text());
+        return;
+    }
+
+    showDiffText(displayDiff, m_diffTitle->text());
+}
+
+DiffViewerSources CommitDetailsPanel::buildSourcesForFile(const QString &path) const
+{
+    DiffViewerSources sources;
+    sources.beforeCaption = tr("Before (parent)");
+    sources.afterCaption = tr("After (commit)");
+
+    if (!m_git || m_repoPath.isEmpty() || m_commitHash.isEmpty()) {
+        return sources;
+    }
+
+    const WorkingFileContent before =
+        m_git->commitFileContent(m_repoPath, m_commitHash, path, WorkingFileSide::Before);
+    const WorkingFileContent after =
+        m_git->commitFileContent(m_repoPath, m_commitHash, path, WorkingFileSide::After);
+
+    sources.before = fileContentText(
+        before, tr("(file did not exist in parent commit)"),
+        tr("(binary file — cannot display as text)"));
+    sources.after = fileContentText(
+        after, tr("(file removed in this commit)"),
+        tr("(binary file — cannot display as text)"));
+
+    return sources;
+}
+
+void CommitDetailsPanel::openDiffInSeparateWindow()
+{
+    if (!m_git || m_repoPath.isEmpty() || m_commitHash.isEmpty()) {
+        return;
+    }
+
+    const QListWidgetItem *item = m_filesList->currentItem();
+    if (!item) {
+        return;
+    }
+
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const QString title = tr("Diff: %1").arg(path);
+    const QString diff = m_git->commitFileDiff(m_repoPath, m_commitHash, path);
+    if (m_git->lastDiffWasBinary()) {
+        DiffViewerDialog::showDiff(this, title, binaryDiffUserMessage(this));
+        return;
+    }
+    if (diff.isEmpty() && !m_git->lastError().isEmpty()) {
+        DiffViewerDialog::showDiff(this, title, m_git->lastError());
+        return;
+    }
+    if (diff.isEmpty()) {
+        DiffViewerDialog::showDiff(this, title, tr("No diff output for this file."));
+        return;
+    }
+
+    DiffViewerDialog::showDiff(this, title, diff, buildSourcesForFile(path), path);
+}
+
+void CommitDetailsPanel::openFileHistoryInSeparateWindow(const QString &path)
+{
+    FileHistoryDialog::open(this, m_git, m_repoPath, path);
 }
 
 void CommitDetailsPanel::showDiffText(const QString &text, const QString &title)

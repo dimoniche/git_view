@@ -21,4 +21,5 @@ struct WorkingTreeChange {
 
     QString statusLabel() const;
     QString statusDescription() const;
+    QString porcelainStatusDisplay() const;
 };

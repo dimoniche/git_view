@@ -1,32 +1,40 @@
 #include "ui/DiffHighlighter.h"
 
+#include "ui/EditorTheme.h"
+
 #include <QColor>
 #include <QFont>
 #include <QTextCharFormat>
+#include <QWidget>
 
-DiffHighlighter::DiffHighlighter(QTextDocument *document)
-    : QSyntaxHighlighter(document)
+DiffHighlighter::DiffHighlighter(QTextDocument *document, QWidget *editor)
+    : QSyntaxHighlighter(document), m_editor(editor)
 {
 }
 
 void DiffHighlighter::highlightBlock(const QString &text)
 {
+    const bool dark = editorUsesDarkTheme(m_editor);
     QTextCharFormat format;
 
     if (text.startsWith(QLatin1String("+++")) || text.startsWith(QLatin1String("---"))
         || text.startsWith(QLatin1String("diff --git")) || text.startsWith(QLatin1String("index "))
         || text.startsWith(QLatin1String("new file")) || text.startsWith(QLatin1String("deleted file"))
         || text.startsWith(QLatin1String("rename"))) {
-        format.setForeground(QColor(0x55, 0x55, 0x55));
+        format.setForeground(dark ? QColor(0x88, 0x88, 0x88) : QColor(0x55, 0x55, 0x55));
         format.setFontWeight(QFont::Bold);
     } else if (text.startsWith(QLatin1Char('@'))) {
         format.setForeground(QColor(0x35, 0x7a, 0xbd));
     } else if (text.startsWith(QLatin1Char('+')) && !text.startsWith(QLatin1String("+++"))) {
-        format.setForeground(QColor(0x1a, 0x7a, 0x3a));
-        format.setBackground(QColor(0xe8, 0xf8, 0xec));
+        const DiffLineTheme theme = diffAddedLineTheme(dark);
+        format.setForeground(theme.foreground);
+        format.setBackground(theme.background);
+        format.setFontWeight(QFont::Bold);
     } else if (text.startsWith(QLatin1Char('-')) && !text.startsWith(QLatin1String("---"))) {
-        format.setForeground(QColor(0xb3, 0x1d, 0x28));
-        format.setBackground(QColor(0xfd, 0xed, 0xed));
+        const DiffLineTheme theme = diffRemovedLineTheme(dark);
+        format.setForeground(theme.foreground);
+        format.setBackground(theme.background);
+        format.setFontWeight(QFont::Bold);
     } else {
         return;
     }

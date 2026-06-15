@@ -8,6 +8,8 @@ class TestGraphLayout : public QObject {
 private slots:
     void assignsLanesForLinearHistory();
     void mergeCommitUsesMultipleLanes();
+    void branchTrunkIsStraightLine();
+    void reusesSideLaneWhenBranchesDoNotOverlap();
 };
 
 void TestGraphLayout::assignsLanesForLinearHistory()
@@ -45,6 +47,60 @@ void TestGraphLayout::mergeCommitUsesMultipleLanes()
     const GraphLayout layout = GraphLayout::build(commits);
     QVERIFY(layout.laneCount >= 2);
     QCOMPARE(layout.edges.size(), size_t(4));
+}
+
+void TestGraphLayout::branchTrunkIsStraightLine()
+{
+    std::vector<Commit> commits(4);
+    commits[0].hash = QStringLiteral("merge");
+    commits[0].parentHashes = {QStringLiteral("main"), QStringLiteral("feature")};
+
+    commits[1].hash = QStringLiteral("main");
+    commits[1].parentHashes = {QStringLiteral("root")};
+
+    commits[2].hash = QStringLiteral("feature");
+    commits[2].parentHashes = {QStringLiteral("root")};
+
+    commits[3].hash = QStringLiteral("root");
+    commits[3].parentHashes = {};
+
+    const GraphLayout layout = GraphLayout::build(commits, QStringLiteral("merge"));
+    QCOMPARE(layout.lanes[0], layout.lanes[1]);
+    QCOMPARE(layout.lanes[0], layout.lanes[3]);
+    QVERIFY(layout.lanes[2] > layout.lanes[0]);
+    QCOMPARE(layout.edges.size(), size_t(4));
+}
+
+void TestGraphLayout::reusesSideLaneWhenBranchesDoNotOverlap()
+{
+    std::vector<Commit> commits(8);
+    commits[0].hash = QStringLiteral("merge_new");
+    commits[0].parentHashes = {QStringLiteral("trunk_mid"), QStringLiteral("side_new")};
+
+    commits[1].hash = QStringLiteral("trunk_mid");
+    commits[1].parentHashes = {QStringLiteral("trunk_old")};
+
+    commits[2].hash = QStringLiteral("trunk_old");
+    commits[2].parentHashes = {QStringLiteral("merge_old")};
+
+    commits[3].hash = QStringLiteral("side_new");
+    commits[3].parentHashes = {QStringLiteral("root")};
+
+    commits[4].hash = QStringLiteral("merge_old");
+    commits[4].parentHashes = {QStringLiteral("trunk_base"), QStringLiteral("side_old")};
+
+    commits[5].hash = QStringLiteral("side_old");
+    commits[5].parentHashes = {QStringLiteral("root")};
+
+    commits[6].hash = QStringLiteral("trunk_base");
+    commits[6].parentHashes = {QStringLiteral("root")};
+
+    commits[7].hash = QStringLiteral("root");
+    commits[7].parentHashes = {};
+
+    const GraphLayout layout = GraphLayout::build(commits, QStringLiteral("merge_new"));
+    QCOMPARE(layout.lanes[3], layout.lanes[5]);
+    QCOMPARE(layout.laneCount, 2);
 }
 
 QTEST_MAIN(TestGraphLayout)

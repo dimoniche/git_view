@@ -1,21 +1,32 @@
 #include "ui/MainWindow.h"
 
+#include "core/WorkingTreeChange.h"
 #include "ui/CommitDetailsPanel.h"
+#include "ui/CommitDetailsDialog.h"
+#include "ui/FileHistoryDialog.h"
 #include "ui/CommitHistoryView.h"
+#include "ui/RemotesDialog.h"
 #include "ui/WorkingChangesPanel.h"
+#include "ui/RepoTerminalPanel.h"
 
 #include <QAction>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QComboBox>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QRadioButton>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QItemSelectionModel>
 #include <QListWidget>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
@@ -23,6 +34,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -43,13 +55,16 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setupUi();
     loadRecentRepos();
-    setStatusMessage(tr("Open a repository to begin"));
 }
 
 void MainWindow::setupUi()
 {
     setWindowTitle(tr("git_view"));
     resize(1200, 800);
+
+    auto *newRepoAction = new QAction(tr("&New repository…"), this);
+    newRepoAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N));
+    connect(newRepoAction, &QAction::triggered, this, &MainWindow::createRepository);
 
     auto *openAction = new QAction(tr("&Open repository…"), this);
     openAction->setShortcut(QKeySequence::Open);
@@ -59,8 +74,28 @@ void MainWindow::setupUi()
     refreshAction->setShortcut(QKeySequence::Refresh);
     connect(refreshAction, &QAction::triggered, this, &MainWindow::refreshRepository);
 
+    m_publishBranchAction = new QAction(tr("First publish…"), this);
+    m_publishBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
+    m_publishBranchAction->setEnabled(false);
+    connect(m_publishBranchAction, &QAction::triggered, this,
+            &MainWindow::publishOrPushSelectedBranch);
+
+    m_fetchAction = new QAction(tr("Fetch…"), this);
+    m_fetchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
+    m_fetchAction->setEnabled(false);
+    connect(m_fetchAction, &QAction::triggered, this, &MainWindow::fetchRemotes);
+
+    m_pullAction = new QAction(tr("Pull…"), this);
+    m_pullAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
+    m_pullAction->setEnabled(false);
+    connect(m_pullAction, &QAction::triggered, this, [this]() { pullCurrentBranch(); });
+
     auto *fileMenu = menuBar()->addMenu(tr("&File"));
+    fileMenu->addAction(newRepoAction);
     fileMenu->addAction(openAction);
+    m_recentReposMenu = fileMenu->addMenu(tr("Open &recent"));
+    m_recentReposMenu->setEnabled(false);
+    connect(m_recentReposMenu, &QMenu::aboutToShow, this, &MainWindow::updateRecentReposMenu);
     fileMenu->addAction(refreshAction);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
@@ -70,6 +105,9 @@ void MainWindow::setupUi()
     toolbar->setFloatable(false);
     toolbar->addAction(openAction);
     toolbar->addAction(refreshAction);
+    toolbar->addAction(m_publishBranchAction);
+    toolbar->addAction(m_fetchAction);
+    toolbar->addAction(m_pullAction);
     toolbar->addSeparator();
 
     m_toggleBranchesAction = toolbar->addAction(tr("Branches"));
@@ -89,8 +127,52 @@ void MainWindow::setupUi()
     m_commitAction->setEnabled(false);
     connect(m_commitAction, &QAction::triggered, this, &MainWindow::commitChanges);
 
+    m_amendAction = new QAction(tr("Amend last commit…"), this);
+    m_amendAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Return));
+    m_amendAction->setEnabled(false);
+    connect(m_amendAction, &QAction::triggered, this, &MainWindow::amendLastCommit);
+
+    m_checkoutAction = new QAction(tr("Checkout branch…"), this);
+    m_checkoutAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
+    m_checkoutAction->setEnabled(false);
+    connect(m_checkoutAction, &QAction::triggered, this, &MainWindow::checkoutSelectedBranch);
+
+    auto *newBranchAction = new QAction(tr("New branch…"), this);
+    newBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
+    connect(newBranchAction, &QAction::triggered, this, [this]() { createBranch(); });
+
+    m_discardAllAction = new QAction(tr("Discard all changes…"), this);
+    m_discardAllAction->setEnabled(false);
+    connect(m_discardAllAction, &QAction::triggered, this, &MainWindow::discardAllChanges);
+
+    m_discardFileAction = new QAction(tr("Discard file changes…"), this);
+    m_discardFileAction->setEnabled(false);
+    connect(m_discardFileAction, &QAction::triggered, this, [this]() {
+        showWorkingTreeTab();
+        if (m_workingPanel && m_workingPanel->hasSelectedChange()) {
+            discardFileChanges(m_workingPanel->selectedFilePaths());
+        }
+    });
+
+    auto *configureRemotesAction = new QAction(tr("Configure remotes…"), this);
+    connect(configureRemotesAction, &QAction::triggered, this, &MainWindow::configureRemotes);
+
+    auto *configureIdentityAction = new QAction(tr("Configure author…"), this);
+    connect(configureIdentityAction, &QAction::triggered, this, &MainWindow::configureGitIdentity);
+
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
+    repoMenu->addAction(m_checkoutAction);
+    repoMenu->addAction(newBranchAction);
+    repoMenu->addAction(configureRemotesAction);
+    repoMenu->addAction(configureIdentityAction);
+    repoMenu->addAction(m_publishBranchAction);
+    repoMenu->addAction(m_fetchAction);
+    repoMenu->addAction(m_pullAction);
     repoMenu->addAction(m_commitAction);
+    repoMenu->addAction(m_amendAction);
+    repoMenu->addSeparator();
+    repoMenu->addAction(m_discardFileAction);
+    repoMenu->addAction(m_discardAllAction);
 
     auto *central = new QWidget(this);
     auto *rootLayout = new QVBoxLayout(central);
@@ -117,31 +199,86 @@ void MainWindow::setupUi()
     branchLayout->setContentsMargins(4, 4, 4, 4);
     branchLayout->addWidget(new QLabel(tr("Branches"), m_branchPanel));
     m_branchList = new QListWidget(m_branchPanel);
+    m_branchList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_branchList, &QListWidget::currentRowChanged, this, &MainWindow::onBranchSelected);
+    connect(m_branchList, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem *) { checkoutSelectedBranch(); });
+    connect(m_branchList, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showBranchContextMenu);
     branchLayout->addWidget(m_branchList, 1);
+    m_checkoutButton = new QPushButton(tr("Checkout…"), m_branchPanel);
+    m_checkoutButton->setEnabled(false);
+    m_checkoutButton->setToolTip(tr("Switch to the selected branch (double-click in the list)"));
+    connect(m_checkoutButton, &QPushButton::clicked, this, &MainWindow::checkoutSelectedBranch);
+    branchLayout->addWidget(m_checkoutButton);
+    m_createBranchButton = new QPushButton(tr("New branch…"), m_branchPanel);
+    m_createBranchButton->setEnabled(false);
+    connect(m_createBranchButton, &QPushButton::clicked, this, [this]() { createBranch(); });
+    branchLayout->addWidget(m_createBranchButton);
+
+    m_publishBranchButton = new QPushButton(tr("First publish…"), m_branchPanel);
+    m_publishBranchButton->setEnabled(false);
+    m_publishBranchButton->setToolTip(
+        tr("Push the current or selected branch to a remote for the first time (git push -u)"));
+    connect(m_publishBranchButton, &QPushButton::clicked, this,
+            &MainWindow::publishOrPushSelectedBranch);
+    branchLayout->addWidget(m_publishBranchButton);
+
+    m_fetchButton = new QPushButton(tr("Fetch…"), m_branchPanel);
+    m_fetchButton->setEnabled(false);
+    m_fetchButton->setToolTip(
+        tr("Download commits from remotes and remove deleted remote branches (git fetch --prune)"));
+    connect(m_fetchButton, &QPushButton::clicked, this, &MainWindow::fetchRemotes);
+    branchLayout->addWidget(m_fetchButton);
+
+    m_pullButton = new QPushButton(tr("Pull…"), m_branchPanel);
+    m_pullButton->setEnabled(false);
+    m_pullButton->setToolTip(tr("Fetch and merge from the branch's upstream (git pull)"));
+    connect(m_pullButton, &QPushButton::clicked, this, &MainWindow::pullCurrentBranch);
+    branchLayout->addWidget(m_pullButton);
+
     m_mergeButton = new QPushButton(tr("Merge into current…"), m_branchPanel);
     m_mergeButton->setEnabled(false);
     connect(m_mergeButton, &QPushButton::clicked, this, &MainWindow::mergeSelectedBranch);
     branchLayout->addWidget(m_mergeButton);
+
+    m_remotesButton = new QPushButton(tr("Remotes…"), m_branchPanel);
+    m_remotesButton->setEnabled(false);
+    connect(m_remotesButton, &QPushButton::clicked, this, &MainWindow::configureRemotes);
+    branchLayout->addWidget(m_remotesButton);
+
     m_mainSplitter->addWidget(m_branchPanel);
 
     auto *historyColumn = new QWidget(m_mainSplitter);
     auto *historyLayout = new QVBoxLayout(historyColumn);
     historyLayout->setContentsMargins(0, 0, 0, 0);
-    m_historyScroll = new QScrollArea(historyColumn);
-    m_historyScroll->setWidgetResizable(true);
-    m_historyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_historyScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_historyScroll->setFrameShape(QFrame::StyledPanel);
-    m_historyView = new CommitHistoryView;
+    m_historyView = new CommitHistoryView(historyColumn);
     connect(m_historyView, &CommitHistoryView::commitSelected, this,
             &MainWindow::onCommitSelected);
-    m_historyScroll->setWidget(m_historyView);
-    historyLayout->addWidget(m_historyScroll, 1);
+    connect(m_historyView, &CommitHistoryView::viewCommitDetailsRequested, this,
+            &MainWindow::focusCommitDetails);
+    connect(m_historyView, &CommitHistoryView::createBranchFromCommitRequested, this,
+            [this](const QString &hash) { createBranch(hash); });
+    historyLayout->addWidget(m_historyView, 1);
+    auto *historyButtons = new QHBoxLayout();
+    m_showAllCommitsButton = new QPushButton(tr("Show all commits"), historyColumn);
+    m_showAllCommitsButton->setVisible(false);
+    m_showAllCommitsButton->setToolTip(tr("Show commit history for all branches"));
+    connect(m_showAllCommitsButton, &QPushButton::clicked, this, &MainWindow::showAllCommits);
+    historyButtons->addWidget(m_showAllCommitsButton);
+
     m_loadMoreButton = new QPushButton(tr("Load more commits…"), historyColumn);
     m_loadMoreButton->setEnabled(false);
     connect(m_loadMoreButton, &QPushButton::clicked, this, &MainWindow::loadMoreCommits);
-    historyLayout->addWidget(m_loadMoreButton);
+    historyButtons->addWidget(m_loadMoreButton);
+
+    m_loadAllButton = new QPushButton(tr("Load all commits…"), historyColumn);
+    m_loadAllButton->setEnabled(false);
+    m_loadAllButton->setToolTip(tr("Load the full commit history (may be slow on large repos)"));
+    connect(m_loadAllButton, &QPushButton::clicked, this, &MainWindow::loadAllCommits);
+    historyButtons->addWidget(m_loadAllButton);
+    historyButtons->addStretch();
+    historyLayout->addLayout(historyButtons);
     m_mainSplitter->addWidget(historyColumn);
 
     m_detailsPanelContainer = new QWidget(m_mainSplitter);
@@ -151,6 +288,20 @@ void MainWindow::setupUi()
     m_detailsPanel = new CommitDetailsPanel(m_detailsPanelContainer);
     m_workingPanel = new WorkingChangesPanel(m_detailsPanelContainer);
     connect(m_workingPanel, &WorkingChangesPanel::commitRequested, this, &MainWindow::commitChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::amendRequested, this, &MainWindow::amendLastCommit);
+    connect(m_workingPanel, &WorkingChangesPanel::discardAllRequested, this, &MainWindow::discardAllChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::discardFilesRequested, this,
+            &MainWindow::discardFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::stageFilesRequested, this,
+            &MainWindow::stageFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::unstageFilesRequested, this,
+            &MainWindow::unstageFileChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::stageAllRequested, this,
+            &MainWindow::stageAllChanges);
+    connect(m_workingPanel, &WorkingChangesPanel::addToGitignoreRequested, this,
+            &MainWindow::addPathToGitignore);
+    connect(m_workingPanel, &WorkingChangesPanel::fileSelectionChanged, this,
+            &MainWindow::updateWorkingTreeActions);
     m_detailsTabs = new QTabWidget(m_detailsPanelContainer);
     m_detailsTabs->addTab(m_detailsPanel, tr("Commit"));
     m_detailsTabs->addTab(m_workingPanel, tr("Working tree"));
@@ -167,7 +318,19 @@ void MainWindow::setupUi()
     m_mainSplitter->setStretchFactor(2, 0);
     m_mainSplitter->setSizes({kDefaultBranchWidth, 700, kDefaultDetailsWidth});
 
-    rootLayout->addWidget(m_mainSplitter, 1);
+    m_rootSplitter = new QSplitter(Qt::Vertical, central);
+    applySplitterStyle(m_rootSplitter);
+    m_rootSplitter->addWidget(m_mainSplitter);
+
+    m_terminalPanel = new RepoTerminalPanel(central);
+    connect(m_terminalPanel, &RepoTerminalPanel::repositoryMayHaveChanged, this,
+            &MainWindow::refreshRepository);
+    m_rootSplitter->addWidget(m_terminalPanel);
+    m_rootSplitter->setStretchFactor(0, 1);
+    m_rootSplitter->setStretchFactor(1, 0);
+    m_rootSplitter->setSizes({560, 180});
+
+    rootLayout->addWidget(m_rootSplitter, 1);
 
     m_statusLabel = new QLabel(central);
     rootLayout->addWidget(m_statusLabel);
@@ -182,6 +345,18 @@ void MainWindow::setupUi()
     workingTabAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
     connect(workingTabAction, &QAction::triggered, this, &MainWindow::showWorkingTreeTab);
     viewMenu->addAction(workingTabAction);
+
+    m_toggleTerminalAction = new QAction(tr("Terminal"), this);
+    m_toggleTerminalAction->setCheckable(true);
+    m_toggleTerminalAction->setChecked(true);
+    m_toggleTerminalAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_T));
+    connect(m_toggleTerminalAction, &QAction::toggled, this, &MainWindow::toggleTerminalPanel);
+    viewMenu->addAction(m_toggleTerminalAction);
+
+    auto *focusTerminalAction = new QAction(tr("Focus terminal"), this);
+    focusTerminalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+`")));
+    connect(focusTerminalAction, &QAction::triggered, this, &MainWindow::showTerminalPanel);
+    viewMenu->addAction(focusTerminalAction);
 
     auto *focusHistoryAction = new QAction(tr("Focus commit history"), this);
     focusHistoryAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
@@ -263,11 +438,44 @@ void MainWindow::showWorkingTreeTab()
     }
 }
 
+void MainWindow::showTerminalPanel()
+{
+    if (m_toggleTerminalAction && !m_toggleTerminalAction->isChecked()) {
+        m_toggleTerminalAction->setChecked(true);
+    }
+    if (m_terminalPanel) {
+        m_terminalPanel->ensureShellStarted();
+        m_terminalPanel->focusInput();
+    }
+}
+
+void MainWindow::toggleTerminalPanel(bool visible)
+{
+    if (!m_rootSplitter || !m_terminalPanel) {
+        return;
+    }
+
+    m_terminalPanel->setVisible(visible);
+    if (visible) {
+        QList<int> sizes = m_rootSplitter->sizes();
+        if (sizes.size() >= 2 && sizes.at(1) < 40) {
+            const int total = sizes.at(0) + sizes.at(1);
+            sizes[0] = qMax(200, total - 180);
+            sizes[1] = 180;
+            m_rootSplitter->setSizes(sizes);
+        }
+        m_terminalPanel->ensureShellStarted();
+        m_terminalPanel->focusInput();
+    }
+}
+
 void MainWindow::resetLayout()
 {
     QSettings settings;
     settings.remove(QStringLiteral("windowGeometry"));
     settings.remove(QStringLiteral("splitterState"));
+    settings.remove(QStringLiteral("rootSplitterState"));
+    settings.remove(QStringLiteral("terminalVisible"));
     settings.remove(QStringLiteral("windowState"));
     resize(1200, 800);
     if (m_toggleBranchesAction) {
@@ -278,6 +486,12 @@ void MainWindow::resetLayout()
     }
     if (m_mainSplitter) {
         m_mainSplitter->setSizes({kDefaultBranchWidth, 700, kDefaultDetailsWidth});
+    }
+    if (m_rootSplitter) {
+        m_rootSplitter->setSizes({560, 180});
+    }
+    if (m_toggleTerminalAction) {
+        m_toggleTerminalAction->setChecked(true);
     }
 }
 
@@ -293,6 +507,18 @@ void MainWindow::restoreWindowLayout()
     if (!splitterState.isEmpty() && m_mainSplitter) {
         m_mainSplitter->restoreState(splitterState);
     }
+
+    const QByteArray rootSplitterState =
+        settings.value(QStringLiteral("rootSplitterState")).toByteArray();
+    if (!rootSplitterState.isEmpty() && m_rootSplitter) {
+        m_rootSplitter->restoreState(rootSplitterState);
+    }
+
+    const bool terminalVisible = settings.value(QStringLiteral("terminalVisible"), true).toBool();
+    if (m_toggleTerminalAction) {
+        m_toggleTerminalAction->setChecked(terminalVisible);
+    }
+    toggleTerminalPanel(terminalVisible);
 
     const bool branchesVisible = settings.value(QStringLiteral("branchesVisible"), true).toBool();
     const bool detailsVisible = settings.value(QStringLiteral("detailsVisible"), true).toBool();
@@ -311,6 +537,12 @@ void MainWindow::saveWindowLayout()
     if (m_mainSplitter) {
         settings.setValue(QStringLiteral("splitterState"), m_mainSplitter->saveState());
     }
+    if (m_rootSplitter) {
+        settings.setValue(QStringLiteral("rootSplitterState"), m_rootSplitter->saveState());
+    }
+    if (m_toggleTerminalAction) {
+        settings.setValue(QStringLiteral("terminalVisible"), m_toggleTerminalAction->isChecked());
+    }
     if (m_toggleBranchesAction) {
         settings.setValue(QStringLiteral("branchesVisible"), m_toggleBranchesAction->isChecked());
     }
@@ -323,6 +555,105 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     saveWindowLayout();
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::createRepository()
+{
+    const QString startDir = m_repo.isValid() ? m_repo.path() : QDir::homePath();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("New repository"));
+    dialog.resize(480, 200);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    layout->addWidget(new QLabel(tr("Folder for the new repository:"), &dialog));
+
+    auto *pathRow = new QHBoxLayout();
+    auto *pathEdit = new QLineEdit(&dialog);
+    pathEdit->setPlaceholderText(startDir);
+    pathRow->addWidget(pathEdit, 1);
+
+    auto *browseButton = new QPushButton(tr("Browse…"), &dialog);
+    connect(browseButton, &QPushButton::clicked, &dialog, [&]() {
+        const QString dir = QFileDialog::getExistingDirectory(
+            &dialog, tr("Choose folder"), pathEdit->text().trimmed().isEmpty()
+                                                ? startDir
+                                                : pathEdit->text().trimmed());
+        if (!dir.isEmpty()) {
+            pathEdit->setText(dir);
+        }
+    });
+    pathRow->addWidget(browseButton);
+    layout->addLayout(pathRow);
+
+    layout->addWidget(new QLabel(tr("Initial branch name:"), &dialog));
+    auto *branchEdit = new QLineEdit(QStringLiteral("main"), &dialog);
+    layout->addWidget(branchEdit);
+
+    layout->addWidget(
+        new QLabel(tr("If the folder does not exist, it will be created."), &dialog));
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    QString path = pathEdit->text().trimmed();
+    if (path.isEmpty()) {
+        QMessageBox::warning(this, tr("New repository"), tr("Choose a folder path."));
+        return;
+    }
+
+    QFileInfo pathInfo(path);
+    if (!pathInfo.isAbsolute()) {
+        path = QDir(startDir).filePath(path);
+        pathInfo.setFile(path);
+    }
+
+    if (m_git.isRepository(path)) {
+        const auto answer = QMessageBox::question(
+            this, tr("New repository"),
+            tr("\"%1\" is already a git repository.\nOpen it instead?").arg(path),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (answer == QMessageBox::Yes) {
+            setRepository(path);
+        }
+        return;
+    }
+
+    if (!pathInfo.exists()) {
+        if (!QDir().mkpath(path)) {
+            QMessageBox::critical(this, tr("New repository"),
+                                  tr("Could not create folder:\n%1").arg(path));
+            return;
+        }
+    } else if (!pathInfo.isDir()) {
+        QMessageBox::warning(this, tr("New repository"),
+                             tr("Path is not a directory:\n%1").arg(path));
+        return;
+    }
+
+    const QString branchName = branchEdit->text().trimmed();
+    const GitProcessResult result = m_git.initRepository(path, branchName);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("New repository failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    if (!output.isEmpty()) {
+        QMessageBox::information(this, tr("New repository"), output);
+    }
+
+    setRepository(path);
 }
 
 void MainWindow::openRepository()
@@ -346,6 +677,81 @@ void MainWindow::refreshRepository()
     refreshWorkingTree();
 }
 
+bool MainWindow::openRepositoryAt(const QString &path)
+{
+    if (path.trimmed().isEmpty()) {
+        return false;
+    }
+
+    const QString topLevel = m_git.discoverGitDir(path);
+    if (topLevel.isEmpty()) {
+        QMessageBox::warning(this, tr("Open repository"),
+                             tr("Could not open repository:\n%1").arg(m_git.lastError()));
+        return false;
+    }
+
+    setRepository(path);
+    return m_repo.isValid();
+}
+
+void MainWindow::applyLaunchOptions(const AppLaunchOptions &options)
+{
+    if (!options.valid || options.showHelp) {
+        return;
+    }
+
+    if (!options.repoPath.isEmpty()) {
+        openRepositoryAt(options.repoPath);
+    }
+
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    switch (options.action) {
+    case LaunchAction::Open:
+        if (!options.filePaths.isEmpty()) {
+            showWorkingTreeTab();
+            m_workingPanel->selectFilePath(options.filePaths.first());
+        }
+        break;
+    case LaunchAction::WorkingChanges:
+        showWorkingTreeTab();
+        if (!options.filePaths.isEmpty()) {
+            m_workingPanel->selectFilePath(options.filePaths.first());
+        }
+        break;
+    case LaunchAction::Commit:
+        showWorkingTreeTab();
+        break;
+    case LaunchAction::Log:
+        focusHistoryPanel();
+        break;
+    case LaunchAction::FileHistory:
+        if (!options.filePaths.isEmpty()) {
+            FileHistoryDialog::open(this, &m_git, m_repo.path(), options.filePaths.first());
+            hide();
+        }
+        break;
+    case LaunchAction::FileDiff:
+        if (!options.filePaths.isEmpty()) {
+            refreshWorkingTree();
+            m_workingPanel->showFileDiffInWindow(options.filePaths.first(), options.diffScope);
+            hide();
+        }
+        break;
+    case LaunchAction::Fetch:
+        fetchRemotes();
+        break;
+    case LaunchAction::Pull:
+        pullCurrentBranch();
+        break;
+    case LaunchAction::Push:
+        publishOrPushSelectedBranch();
+        break;
+    }
+}
+
 void MainWindow::setRepository(const QString &path)
 {
     const QString topLevel = m_git.discoverGitDir(path);
@@ -358,27 +764,29 @@ void MainWindow::setRepository(const QString &path)
     m_repo.setPath(topLevel);
     m_detailsPanel->setRepoContext(topLevel, &m_git);
     m_workingPanel->setRepoContext(topLevel, &m_git);
+    if (m_terminalPanel) {
+        m_terminalPanel->setWorkingDirectory(topLevel);
+    }
     m_logLimit = kInitialLogLimit;
     m_branchFilter.clear();
     saveRecentRepo(topLevel);
 
-    m_branchList->clearSelection();
     reloadBranches();
-    reloadLog();
+    selectCurrentBranch();
     refreshWorkingTree();
 
     if (m_git.hasUncommittedChanges(topLevel)) {
         m_detailsTabs->setCurrentWidget(m_workingPanel);
     }
 
+    m_createBranchButton->setEnabled(true);
     m_mergeButton->setEnabled(true);
+    if (m_remotesButton) {
+        m_remotesButton->setEnabled(true);
+    }
     m_loadMoreButton->setEnabled(true);
-    if (m_commitAction) {
-        m_commitAction->setEnabled(true);
-    }
-    if (m_workingPanel) {
-        m_workingPanel->setCommitEnabled(true);
-    }
+    updateWorkingTreeActions();
+    updateBranchActions();
     setStatusMessage(tr("Loaded %1").arg(topLevel));
 }
 
@@ -426,6 +834,29 @@ void MainWindow::commitChanges()
     messageEdit->setMinimumHeight(140);
     layout->addWidget(messageEdit, 1);
 
+    const Branch currentBranch = currentLocalBranch();
+    const bool hasRemotes = !m_git.remotes(m_repo.path()).isEmpty();
+    const bool canPushAfterCommit = hasRemotes && currentBranch.hasUpstream();
+
+    QSettings settings;
+    auto *pushAfterCommitCheck =
+        new QCheckBox(tr("Push to upstream after commit"), &dialog);
+    pushAfterCommitCheck->setChecked(
+        settings.value(QStringLiteral("ui/pushAfterCommit"), false).toBool());
+    pushAfterCommitCheck->setEnabled(canPushAfterCommit);
+    if (!hasRemotes) {
+        pushAfterCommitCheck->setToolTip(
+            tr("Configure a remote (Repository → Configure remotes…) to enable push."));
+    } else if (!currentBranch.hasUpstream()) {
+        pushAfterCommitCheck->setToolTip(
+            tr("Publish the branch first (First publish…) to set an upstream."));
+    } else {
+        pushAfterCommitCheck->setToolTip(
+            tr("Runs git push %1 after a successful commit.")
+                .arg(currentBranch.upstream.section(QLatin1Char('/'), 0, 0)));
+    }
+    layout->addWidget(pushAfterCommitCheck);
+
     auto *buttons =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -442,6 +873,12 @@ void MainWindow::commitChanges()
         return;
     }
 
+    if (!m_git.hasUserIdentity(m_repo.path())) {
+        if (!promptGitIdentity(tr("Author identity is not configured yet."))) {
+            return;
+        }
+    }
+
     if (stageAllRadio->isChecked()) {
         const GitProcessResult stageResult = m_git.stageAll(m_repo.path());
         if (!stageResult.success()) {
@@ -453,19 +890,600 @@ void MainWindow::commitChanges()
         return;
     }
 
-    const GitProcessResult commitResult = m_git.commit(m_repo.path(), message);
+    auto commitOnce = [&]() { return m_git.commit(m_repo.path(), message); };
+
+    GitProcessResult commitResult = commitOnce();
+    if (!commitResult.success() && GitService::isCommitIdentityError(commitResult)) {
+        if (promptGitIdentity(tr("Git could not determine the commit author."))) {
+            commitResult = commitOnce();
+        }
+    }
     if (!commitResult.success()) {
-        QMessageBox::critical(
-            this, tr("Commit failed"),
-            tr("%1\n\n%2").arg(m_git.lastError(), commitResult.stdoutText.trimmed()));
+        QStringList parts;
+        for (const QString &part :
+             {m_git.lastError(), commitResult.stderrText.trimmed(),
+              commitResult.stdoutText.trimmed()}) {
+            if (!part.isEmpty()) {
+                parts << part;
+            }
+        }
+        QMessageBox::critical(this, tr("Commit failed"), parts.join(QStringLiteral("\n\n")));
         return;
     }
 
+    settings.setValue(QStringLiteral("ui/pushAfterCommit"), pushAfterCommitCheck->isChecked());
+
     const QString output = commitResult.stdoutText.trimmed();
-    QMessageBox::information(
-        this, tr("Commit"),
-        output.isEmpty() ? tr("Commit created successfully.") : output);
+    QString resultMessage =
+        output.isEmpty() ? tr("Commit created successfully.") : output;
+
+    if (pushAfterCommitCheck->isChecked()) {
+        if (pushBranchNoPrompt(currentBranch)) {
+            resultMessage += QLatin1Char('\n') + tr("Changes were pushed to %1.")
+                                                 .arg(currentBranch.upstream);
+        }
+    }
+
+    QMessageBox::information(this, tr("Commit"), resultMessage);
+
+    if (!currentBranch.name.isEmpty() && !currentBranch.isRemote
+        && !GitService::isPseudoDetachedBranchName(currentBranch.name)) {
+        m_branchFilter = currentBranch.name;
+    }
     refreshRepository();
+}
+
+void MainWindow::amendLastCommit()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Amend commit"), tr("Open a repository first."));
+        return;
+    }
+
+    if (!m_git.hasCommits(m_repo.path())) {
+        QMessageBox::information(this, tr("Amend commit"), tr("There are no commits to amend."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Amend commit"),
+            tr("Cannot amend: resolve merge conflicts first.\n\n%1")
+                .arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const bool dirty = m_git.hasUncommittedChanges(m_repo.path());
+    const Branch currentBranch = currentLocalBranch();
+    const BranchSyncCounts syncCounts = m_git.currentBranchSyncCounts(m_repo.path());
+    const bool likelyPushed =
+        currentBranch.hasUpstream() && syncCounts.valid && syncCounts.ahead == 0;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Amend last commit"));
+    dialog.resize(520, 400);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *infoLabel = new QLabel(
+        tr("Replace the latest commit with a new one. Staged changes can be folded into it, "
+           "or you can edit the commit message only."),
+        &dialog);
+    infoLabel->setWordWrap(true);
+    layout->addWidget(infoLabel);
+
+    if (likelyPushed) {
+        auto *warningLabel = new QLabel(
+            tr("The current branch appears to be in sync with its upstream. Amending rewrites "
+               "history and may require a force push."),
+            &dialog);
+        warningLabel->setWordWrap(true);
+        warningLabel->setStyleSheet(QStringLiteral("color: palette(link);"));
+        layout->addWidget(warningLabel);
+    }
+
+    QRadioButton *stageAllRadio = nullptr;
+    QRadioButton *stagedOnlyRadio = nullptr;
+    if (dirty) {
+        stageAllRadio =
+            new QRadioButton(tr("Stage all changes and amend (git add -A)"), &dialog);
+        stagedOnlyRadio = new QRadioButton(tr("Amend with staged changes only"), &dialog);
+        stageAllRadio->setChecked(true);
+        if (!m_git.hasStagedChanges(m_repo.path())) {
+            stagedOnlyRadio->setEnabled(false);
+        }
+        layout->addWidget(stageAllRadio);
+        layout->addWidget(stagedOnlyRadio);
+    }
+
+    auto *keepMessageCheck =
+        new QCheckBox(tr("Keep commit message unchanged (git commit --amend --no-edit)"), &dialog);
+    layout->addWidget(keepMessageCheck);
+
+    layout->addWidget(new QLabel(tr("Commit message:"), &dialog));
+    auto *messageEdit = new QPlainTextEdit(&dialog);
+    messageEdit->setPlainText(m_git.headCommitMessage(m_repo.path()));
+    messageEdit->setMinimumHeight(140);
+    layout->addWidget(messageEdit, 1);
+
+    const bool hasRemotes = !m_git.remotes(m_repo.path()).isEmpty();
+    const bool canPushAfterAmend = hasRemotes && currentBranch.hasUpstream();
+
+    QSettings settings;
+    auto *pushAfterAmendCheck =
+        new QCheckBox(tr("Push to upstream after amend"), &dialog);
+    pushAfterAmendCheck->setChecked(
+        settings.value(QStringLiteral("ui/pushAfterCommit"), false).toBool());
+    pushAfterAmendCheck->setEnabled(canPushAfterAmend);
+    if (likelyPushed) {
+        pushAfterAmendCheck->setText(tr("Force push to upstream after amend (--force-with-lease)"));
+    }
+    if (!hasRemotes) {
+        pushAfterAmendCheck->setToolTip(
+            tr("Configure a remote (Repository → Configure remotes…) to enable push."));
+    } else if (!currentBranch.hasUpstream()) {
+        pushAfterAmendCheck->setToolTip(
+            tr("Publish the branch first (First publish…) to set an upstream."));
+    } else if (likelyPushed) {
+        pushAfterAmendCheck->setToolTip(
+            tr("Uses git push --force-with-lease because the amended commit replaces the one on "
+               "the remote."));
+    }
+    layout->addWidget(pushAfterAmendCheck);
+
+    const auto syncMessageEditor = [keepMessageCheck, messageEdit]() {
+        messageEdit->setEnabled(!keepMessageCheck->isChecked());
+    };
+    connect(keepMessageCheck, &QCheckBox::toggled, &dialog, syncMessageEditor);
+    syncMessageEditor();
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const bool keepMessage = keepMessageCheck->isChecked();
+    const QString message = messageEdit->toPlainText().trimmed();
+    if (!keepMessage && message.isEmpty()) {
+        QMessageBox::warning(this, tr("Amend commit"), tr("Commit message cannot be empty."));
+        return;
+    }
+
+    if (!m_git.hasUserIdentity(m_repo.path())) {
+        if (!promptGitIdentity(tr("Author identity is not configured yet."))) {
+            return;
+        }
+    }
+
+    if (dirty) {
+        if (stageAllRadio && stageAllRadio->isChecked()) {
+            const GitProcessResult stageResult = m_git.stageAll(m_repo.path());
+            if (!stageResult.success()) {
+                QMessageBox::critical(this, tr("Amend commit"), m_git.lastError());
+                return;
+            }
+        } else if (!m_git.hasStagedChanges(m_repo.path())) {
+            QMessageBox::warning(
+                this, tr("Amend commit"),
+                tr("Nothing is staged. Stage changes first or use \"Stage all\"."));
+            return;
+        }
+    } else if (keepMessage) {
+        QMessageBox::information(
+            this, tr("Amend commit"),
+            tr("There are no changes to include and the commit message is unchanged."));
+        return;
+    }
+
+    auto amendOnce = [&]() { return m_git.amendCommit(m_repo.path(), message, keepMessage); };
+
+    GitProcessResult amendResult = amendOnce();
+    if (!amendResult.success() && GitService::isCommitIdentityError(amendResult)) {
+        if (promptGitIdentity(tr("Git could not determine the commit author."))) {
+            amendResult = amendOnce();
+        }
+    }
+    if (!amendResult.success()) {
+        QStringList parts;
+        for (const QString &part :
+             {m_git.lastError(), amendResult.stderrText.trimmed(), amendResult.stdoutText.trimmed()}) {
+            if (!part.isEmpty()) {
+                parts << part;
+            }
+        }
+        QMessageBox::critical(this, tr("Amend commit failed"), parts.join(QStringLiteral("\n\n")));
+        return;
+    }
+
+    if (pushAfterAmendCheck->isChecked()) {
+        settings.setValue(QStringLiteral("ui/pushAfterCommit"), true);
+    }
+
+    const QString output = amendResult.stdoutText.trimmed();
+    QString resultMessage =
+        output.isEmpty() ? tr("Last commit amended successfully.") : output;
+
+    if (pushAfterAmendCheck->isChecked()) {
+        QString remote;
+        const int slash = currentBranch.upstream.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            remote = currentBranch.upstream.left(slash);
+        }
+        const QStringList remoteList = m_git.remotes(m_repo.path());
+        if (!remote.isEmpty() && remoteList.contains(remote)
+            && executePush(currentBranch, remote, false,
+                           likelyPushed ? tr("Force push after amend failed")
+                                        : tr("Push after amend failed"),
+                           likelyPushed)) {
+            resultMessage += QLatin1Char('\n')
+                              + (likelyPushed
+                                     ? tr("Changes were force-pushed to %1.")
+                                           .arg(currentBranch.upstream)
+                                     : tr("Changes were pushed to %1.").arg(currentBranch.upstream));
+        }
+    }
+
+    QMessageBox::information(this, tr("Amend commit"), resultMessage);
+
+    if (!currentBranch.name.isEmpty() && !currentBranch.isRemote
+        && !GitService::isPseudoDetachedBranchName(currentBranch.name)) {
+        m_branchFilter = currentBranch.name;
+    }
+    refreshRepository();
+}
+
+void MainWindow::discardAllChanges()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Discard changes"), tr("Open a repository first."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Discard changes"),
+            tr("Cannot discard while merge conflicts are unresolved.\nUse \"Merge abort\" or resolve conflicts first.\n\n%1")
+                .arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    if (!m_git.hasUncommittedChanges(m_repo.path())) {
+        QMessageBox::information(this, tr("Discard changes"), tr("There are no changes to discard."));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const auto answer = QMessageBox::warning(
+        this, tr("Discard all changes"),
+        tr("Permanently discard ALL uncommitted changes?\n\n"
+           "• Tracked files will be reset to the last commit (git reset --hard HEAD)\n"
+           "• Untracked files and folders will be deleted (git clean -fd)\n\n"
+           "This cannot be undone."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const GitProcessResult result = m_git.discardAllChanges(m_repo.path());
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Discard failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    QMessageBox::information(this, tr("Discard changes"), tr("All uncommitted changes were discarded."));
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::discardFileChanges(const QStringList &paths)
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Discard changes"), tr("Open a repository first."));
+        return;
+    }
+
+    QStringList uniquePaths;
+    for (const QString &path : paths) {
+        if (!path.isEmpty() && !uniquePaths.contains(path)) {
+            uniquePaths.append(path);
+        }
+    }
+
+    if (uniquePaths.isEmpty()) {
+        QMessageBox::information(this, tr("Discard changes"), tr("Select files in the list first."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    QStringList conflictedPaths;
+    for (const QString &path : uniquePaths) {
+        if (conflicts.contains(path)) {
+            conflictedPaths.append(path);
+        }
+    }
+    if (!conflictedPaths.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Discard changes"),
+            tr("Cannot discard files with merge conflicts:\n%1").arg(conflictedPaths.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    const std::vector<WorkingTreeChange> allChanges = m_git.workingTreeChanges(m_repo.path());
+    std::vector<WorkingTreeChange> changesToDiscard;
+    QStringList missingPaths;
+    for (const QString &path : uniquePaths) {
+        bool found = false;
+        for (const WorkingTreeChange &candidate : allChanges) {
+            if (candidate.path == path) {
+                changesToDiscard.push_back(candidate);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            missingPaths.append(path);
+        }
+    }
+
+    if (changesToDiscard.empty()) {
+        QMessageBox::information(this, tr("Discard changes"),
+                               tr("Selected files have no pending changes."));
+        QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    QString actionText;
+    if (changesToDiscard.size() == 1) {
+        const WorkingTreeChange &change = changesToDiscard.front();
+        const QString &path = change.path;
+        if (change.isUntracked()) {
+            actionText = tr("Delete untracked path \"%1\"?").arg(path);
+        } else {
+            actionText =
+                tr("Discard all changes to \"%1\" (staged and unstaged) and restore the last committed version?")
+                    .arg(path);
+        }
+    } else {
+        QStringList listedPaths;
+        for (const WorkingTreeChange &change : changesToDiscard) {
+            listedPaths.append(change.path);
+        }
+        actionText =
+            tr("Discard all changes to %1 selected files (staged and unstaged) and restore the last committed versions?")
+                .arg(changesToDiscard.size());
+        actionText += QStringLiteral("\n\n") + listedPaths.join(QLatin1Char('\n'));
+    }
+
+    const auto answer =
+        QMessageBox::warning(this, tr("Discard file changes"), actionText,
+                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    QStringList failedPaths;
+    QString lastError;
+    QString lastStderr;
+    for (const WorkingTreeChange &change : changesToDiscard) {
+        const GitProcessResult result = m_git.discardFileChanges(m_repo.path(), change);
+        if (!result.success()) {
+            failedPaths.append(change.path);
+            lastError = m_git.lastError();
+            lastStderr = result.stderrText.trimmed();
+        }
+    }
+
+    if (!failedPaths.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Discard failed"),
+            tr("Failed to discard changes to:\n%1\n\n%2\n\n%3")
+                .arg(failedPaths.join(QLatin1Char('\n')), lastError, lastStderr));
+        QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+        return;
+    }
+
+    if (changesToDiscard.size() == 1) {
+        QMessageBox::information(this, tr("Discard changes"),
+                                 tr("Changes to \"%1\" were discarded.")
+                                     .arg(changesToDiscard.front().path));
+    } else {
+        QMessageBox::information(
+            this, tr("Discard changes"),
+            tr("Changes to %1 files were discarded.").arg(changesToDiscard.size()));
+    }
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::stageFileChanges(const QStringList &paths)
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    QStringList uniquePaths;
+    for (const QString &path : paths) {
+        if (!path.isEmpty() && !uniquePaths.contains(path)) {
+            uniquePaths.append(path);
+        }
+    }
+    if (uniquePaths.isEmpty()) {
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    QStringList conflictedPaths;
+    for (const QString &path : uniquePaths) {
+        if (conflicts.contains(path)) {
+            conflictedPaths.append(path);
+        }
+    }
+    if (!conflictedPaths.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Stage files"),
+            tr("Cannot stage files with merge conflicts:\n%1")
+                .arg(conflictedPaths.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.stagePaths(m_repo.path(), uniquePaths);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Stage failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        refreshWorkingTree();
+        return;
+    }
+
+    refreshWorkingTree();
+}
+
+void MainWindow::unstageFileChanges(const QStringList &paths)
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    QStringList uniquePaths;
+    for (const QString &path : paths) {
+        if (!path.isEmpty() && !uniquePaths.contains(path)) {
+            uniquePaths.append(path);
+        }
+    }
+    if (uniquePaths.isEmpty()) {
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.unstagePaths(m_repo.path(), uniquePaths);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Unstage failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        refreshWorkingTree();
+        return;
+    }
+
+    refreshWorkingTree();
+}
+
+void MainWindow::stageAllChanges()
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    if (!m_git.hasUncommittedChanges(m_repo.path())) {
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Stage all"),
+            tr("Cannot stage changes while merge conflicts are unresolved:\n%1")
+                .arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.stageAll(m_repo.path());
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Stage all failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        refreshWorkingTree();
+        return;
+    }
+
+    refreshWorkingTree();
+}
+
+void MainWindow::addPathToGitignore(const QString &path)
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Add to .gitignore"), tr("Open a repository first."));
+        return;
+    }
+
+    if (path.isEmpty()) {
+        QMessageBox::information(this, tr("Add to .gitignore"),
+                                 tr("Select a file in the list first."));
+        return;
+    }
+
+    const WorkingTreeChange change = m_git.changeForPath(m_repo.path(), path);
+    const bool tracked = !change.isUntracked();
+
+    QString message =
+        tr("Add \"%1\" to .gitignore?").arg(path);
+    if (tracked) {
+        message += QLatin1Char('\n');
+        message += QLatin1Char('\n');
+        message += tr("The file is tracked by Git; it will be removed from the index "
+                      "(git rm --cached) but kept on disk.");
+    }
+
+    const auto answer =
+        QMessageBox::question(this, tr("Add to .gitignore"), message, QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::Yes);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    showWorkingTreeTab();
+
+    const GitProcessResult result = m_git.addToGitignore(m_repo.path(), path);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Add to .gitignore failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    QMessageBox::information(this, tr("Add to .gitignore"),
+                             tr("\"%1\" was added to .gitignore.").arg(path));
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::updateWorkingTreeActions()
+{
+    if (!m_workingPanel) {
+        return;
+    }
+    const bool repoOpen = m_repo.isValid();
+    const bool dirty = repoOpen && m_git.hasUncommittedChanges(m_repo.path());
+    if (m_commitAction) {
+        m_commitAction->setEnabled(repoOpen && dirty);
+    }
+    const bool canAmend = repoOpen && m_git.hasCommits(m_repo.path());
+    if (m_amendAction) {
+        m_amendAction->setEnabled(canAmend);
+    }
+    if (m_discardAllAction) {
+        m_discardAllAction->setEnabled(repoOpen && dirty);
+    }
+    if (m_discardFileAction) {
+        m_discardFileAction->setEnabled(repoOpen && dirty && m_workingPanel->hasSelectedChange());
+    }
+    m_workingPanel->setCommitEnabled(repoOpen);
+    m_workingPanel->setAmendEnabled(canAmend);
 }
 
 void MainWindow::updateRepoLabel()
@@ -475,7 +1493,7 @@ void MainWindow::updateRepoLabel()
         return;
     }
 
-    const QString branch = m_git.currentBranch(m_repo.path());
+    const QString branch = m_git.displayBranchName(m_repo.path());
     const bool dirty = m_git.hasUncommittedChanges(m_repo.path());
     QString html = tr("Repository: %1 — branch: %2")
                        .arg(m_repo.path().toHtmlEscaped(), branch.toHtmlEscaped());
@@ -499,14 +1517,32 @@ void MainWindow::refreshWorkingTree()
         m_detailsTabs->setTabText(workingTabIndex,
                                   dirty ? tr("Working tree *") : tr("Working tree"));
     }
+    updateWorkingTreeActions();
     updateRepoLabel();
 }
 
 void MainWindow::reloadBranches()
 {
+    if (!m_branchList) {
+        return;
+    }
+
+    m_syncingBranchList = true;
+
+    QItemSelectionModel *selection = m_branchList->selectionModel();
+    if (selection) {
+        selection->blockSignals(true);
+    }
+    m_branchList->blockSignals(true);
+
     m_branchList->clear();
     m_branches = m_git.branches(m_repo.path());
     if (m_branches.empty() && !m_git.lastError().isEmpty()) {
+        m_branchList->blockSignals(false);
+        if (selection) {
+            selection->blockSignals(false);
+        }
+        m_syncingBranchList = false;
         setStatusMessage(m_git.lastError());
         return;
     }
@@ -518,21 +1554,572 @@ void MainWindow::reloadBranches()
         }
         if (branch.isRemote) {
             label += QStringLiteral(" [remote]");
+        } else if (!branch.hasUpstream()) {
+            label += QStringLiteral(" [unpublished]");
         }
         auto *item = new QListWidgetItem(label, m_branchList);
         item->setData(Qt::UserRole, branch.name);
+    }
+
+    restoreBranchListSelection();
+
+    m_branchList->blockSignals(false);
+    if (selection) {
+        selection->blockSignals(false);
+    }
+    m_syncingBranchList = false;
+
+    updateBranchActions();
+}
+
+void MainWindow::restoreBranchListSelection()
+{
+    if (!m_branchList) {
+        return;
+    }
+
+    int row = -1;
+    if (!m_branchFilter.isEmpty()) {
+        row = rowForBranch(m_branchFilter);
+    }
+    if (row < 0) {
+        row = currentBranchRow();
+    }
+    if (row >= 0) {
+        m_branchList->setCurrentRow(row);
+    }
+}
+
+int MainWindow::rowForBranch(const QString &name) const
+{
+    if (name.isEmpty()) {
+        return -1;
+    }
+
+    for (int row = 0; row < static_cast<int>(m_branches.size()); ++row) {
+        if (m_branches[static_cast<size_t>(row)].name == name) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+int MainWindow::currentBranchRow() const
+{
+    for (int row = 0; row < static_cast<int>(m_branches.size()); ++row) {
+        const Branch &branch = m_branches[static_cast<size_t>(row)];
+        if (branch.isCurrent && !branch.isRemote) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+void MainWindow::selectBranchRow(int row, bool updateLog)
+{
+    if (!m_branchList || row < 0) {
+        return;
+    }
+
+    m_syncingBranchList = true;
+
+    QItemSelectionModel *selection = m_branchList->selectionModel();
+    if (selection) {
+        selection->blockSignals(true);
+    }
+    m_branchList->blockSignals(true);
+    m_branchList->setCurrentRow(row);
+    m_branchList->blockSignals(false);
+    if (selection) {
+        selection->blockSignals(false);
+    }
+    m_syncingBranchList = false;
+
+    updateBranchActions();
+
+    if (!updateLog || !m_repo.isValid()) {
+        return;
+    }
+
+    const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    m_logLimit = kInitialLogLimit;
+    reloadLog(branch.name);
+}
+
+void MainWindow::selectCurrentBranch()
+{
+    const int row = currentBranchRow();
+    if (row >= 0) {
+        selectBranchRow(row, true);
+        return;
+    }
+
+    if (m_branchList) {
+        m_branchList->clearSelection();
+    }
+    m_logLimit = kInitialLogLimit;
+    reloadLog();
+    updateBranchActions();
+}
+
+Branch MainWindow::branchForActions() const
+{
+    const int row = m_branchList ? m_branchList->currentRow() : -1;
+    if (row >= 0) {
+        const Branch selected = branchAtRow(row);
+        if (!selected.name.isEmpty() && !selected.isRemote) {
+            return selected;
+        }
+    }
+
+    const QString current = m_repo.isValid() ? m_git.currentBranch(m_repo.path()) : QString();
+    for (const Branch &branch : m_branches) {
+        if (branch.name == current && !branch.isRemote) {
+            return branch;
+        }
+    }
+
+    Branch fallback;
+    fallback.name = current;
+    fallback.isCurrent = true;
+    return fallback;
+}
+
+void MainWindow::updateBranchActions()
+{
+    const bool repoOpen = m_repo.isValid();
+
+    if (m_createBranchButton) {
+        m_createBranchButton->setEnabled(repoOpen);
+    }
+
+    const int selectedRow = m_branchList ? m_branchList->currentRow() : -1;
+    const Branch selectedBranch = branchAtRow(selectedRow);
+    const bool canCheckout =
+        repoOpen && selectedRow >= 0 && !selectedBranch.name.isEmpty() && !selectedBranch.isCurrent;
+    if (m_checkoutButton) {
+        m_checkoutButton->setEnabled(canCheckout);
+        if (canCheckout) {
+            m_checkoutButton->setToolTip(
+                tr("Switch to \"%1\" (double-click in the list)").arg(selectedBranch.name));
+        } else if (selectedBranch.isCurrent) {
+            m_checkoutButton->setToolTip(tr("Already on this branch"));
+        } else {
+            m_checkoutButton->setToolTip(tr("Select a branch to switch to"));
+        }
+    }
+    if (m_checkoutAction) {
+        m_checkoutAction->setEnabled(canCheckout);
+    }
+
+    if (m_mergeButton) {
+        const int row = m_branchList ? m_branchList->currentRow() : -1;
+        m_mergeButton->setEnabled(repoOpen && row >= 0);
+    }
+
+    const Branch branch = branchForActions();
+    const bool localBranch = repoOpen && !branch.name.isEmpty() && !branch.isRemote;
+    const bool hasRemotes = repoOpen && !m_git.remotes(m_repo.path()).isEmpty();
+    const bool unpublished = localBranch && !branch.hasUpstream();
+    const bool published = localBranch && branch.hasUpstream();
+
+    if (m_publishBranchButton) {
+        if (unpublished) {
+            m_publishBranchButton->setText(tr("First publish…"));
+            m_publishBranchButton->setEnabled(hasRemotes);
+            m_publishBranchButton->setToolTip(
+                tr("First push of \"%1\" to a remote (git push -u)").arg(branch.name));
+        } else if (published) {
+            m_publishBranchButton->setText(tr("Push branch…"));
+            m_publishBranchButton->setEnabled(true);
+            m_publishBranchButton->setToolTip(
+                tr("Push commits on \"%1\" to %2").arg(branch.name, branch.upstream));
+        } else {
+            m_publishBranchButton->setText(tr("First publish…"));
+            m_publishBranchButton->setEnabled(false);
+            m_publishBranchButton->setToolTip(
+                tr("Select a local branch or switch to one to publish"));
+        }
+    }
+
+    if (m_publishBranchAction) {
+        if (m_publishBranchButton) {
+            m_publishBranchAction->setText(m_publishBranchButton->text());
+            m_publishBranchAction->setEnabled(m_publishBranchButton->isEnabled());
+        } else {
+            m_publishBranchAction->setEnabled(false);
+        }
+    }
+
+    Branch currentBranch;
+    for (const Branch &candidate : m_branches) {
+        if (candidate.isCurrent && !candidate.isRemote) {
+            currentBranch = candidate;
+            break;
+        }
+    }
+    const bool canPull =
+        repoOpen && hasRemotes && !currentBranch.name.isEmpty();
+    if (m_fetchButton) {
+        m_fetchButton->setEnabled(hasRemotes);
+    }
+    if (m_fetchAction) {
+        m_fetchAction->setEnabled(hasRemotes);
+    }
+
+    if (m_pullButton) {
+        m_pullButton->setEnabled(canPull);
+        if (currentBranch.hasUpstream()) {
+            m_pullButton->setToolTip(
+                tr("Pull from %1 (git pull)").arg(currentBranch.upstream));
+        } else {
+            m_pullButton->setToolTip(
+                tr("Pull current branch \"%1\" from a remote").arg(currentBranch.name));
+        }
+    }
+    if (m_pullAction) {
+        m_pullAction->setEnabled(canPull);
+    }
+}
+
+void MainWindow::configureGitIdentity()
+{
+    promptGitIdentity();
+}
+
+bool MainWindow::promptGitIdentity(const QString &reason)
+{
+    const QString repoPath = m_repo.isValid() ? m_repo.path() : QString();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Git author identity"));
+    dialog.resize(520, 300);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    QString intro = tr("Git needs your name and email to create commits.");
+    if (!reason.isEmpty()) {
+        intro += QStringLiteral("\n\n") + reason;
+    }
+    auto *introLabel = new QLabel(intro, &dialog);
+    introLabel->setWordWrap(true);
+    layout->addWidget(introLabel);
+
+    auto *hintLabel = new QLabel(
+        tr("If you use GitHub, use the email from GitHub Settings → Emails "
+           "(or your private noreply address)."),
+        &dialog);
+    hintLabel->setWordWrap(true);
+    layout->addWidget(hintLabel);
+
+    layout->addWidget(new QLabel(tr("Name:"), &dialog));
+    auto *nameEdit = new QLineEdit(&dialog);
+    nameEdit->setText(m_git.configValue(repoPath, QStringLiteral("user.name")));
+    nameEdit->setClearButtonEnabled(true);
+    layout->addWidget(nameEdit);
+
+    layout->addWidget(new QLabel(tr("Email:"), &dialog));
+    auto *emailEdit = new QLineEdit(&dialog);
+    emailEdit->setText(m_git.configValue(repoPath, QStringLiteral("user.email")));
+    emailEdit->setPlaceholderText(tr("you@example.com"));
+    emailEdit->setClearButtonEnabled(true);
+    layout->addWidget(emailEdit);
+
+    auto *globalRadio = new QRadioButton(tr("All repositories (global)"), &dialog);
+    auto *localRadio = new QRadioButton(tr("This repository only"), &dialog);
+    globalRadio->setChecked(true);
+    if (m_repo.isValid()) {
+        layout->addWidget(globalRadio);
+        layout->addWidget(localRadio);
+    }
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (nameEdit->text().trimmed().isEmpty()) {
+        nameEdit->setFocus();
+    } else {
+        emailEdit->setFocus();
+    }
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+
+    const QString name = nameEdit->text().trimmed();
+    const QString email = emailEdit->text().trimmed();
+    if (name.isEmpty()) {
+        QMessageBox::warning(this, tr("Author identity"), tr("Name cannot be empty."));
+        return false;
+    }
+    if (email.isEmpty()) {
+        QMessageBox::warning(this, tr("Author identity"), tr("Email cannot be empty."));
+        return false;
+    }
+    if (!email.contains(QLatin1Char('@'))) {
+        QMessageBox::warning(this, tr("Author identity"), tr("Email address looks invalid."));
+        return false;
+    }
+
+    const bool global = !m_repo.isValid() || globalRadio->isChecked();
+    const GitProcessResult result = m_git.setUserIdentity(repoPath, name, email, global);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Author identity"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return false;
+    }
+
+    return m_git.hasUserIdentity(repoPath);
+}
+
+bool MainWindow::promptRemoteCredentials(const QString &remote, const QString &reason)
+{
+    if (!m_repo.isValid() || remote.isEmpty()) {
+        return false;
+    }
+
+    const QString url = m_git.remoteUrl(m_repo.path(), remote, true);
+    if (url.isEmpty()) {
+        QMessageBox::critical(this, tr("Remote authentication"), m_git.lastError());
+        return false;
+    }
+
+    if (!GitService::isHttpsRemoteUrl(url)) {
+        return ensureRemoteAuthentication(remote, reason);
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Remote authentication"));
+    dialog.resize(520, 320);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    QString intro =
+        tr("Sign in to push to %1.\nRemote URL: %2").arg(remote, url);
+    if (!reason.isEmpty()) {
+        intro += QStringLiteral("\n\n") + reason;
+    }
+    auto *introLabel = new QLabel(intro, &dialog);
+    introLabel->setWordWrap(true);
+    layout->addWidget(introLabel);
+
+    auto *hintLabel = new QLabel(
+        tr("GitHub no longer accepts account passwords for HTTPS. Create a personal access "
+           "token at github.com → Settings → Developer settings → Personal access tokens, "
+           "then paste it below."),
+        &dialog);
+    hintLabel->setWordWrap(true);
+    layout->addWidget(hintLabel);
+
+    layout->addWidget(new QLabel(tr("Username:"), &dialog));
+    auto *usernameEdit = new QLineEdit(&dialog);
+    usernameEdit->setClearButtonEnabled(true);
+    layout->addWidget(usernameEdit);
+
+    layout->addWidget(new QLabel(tr("Token or password:"), &dialog));
+    auto *tokenEdit = new QLineEdit(&dialog);
+    tokenEdit->setEchoMode(QLineEdit::Password);
+    tokenEdit->setClearButtonEnabled(true);
+    layout->addWidget(tokenEdit);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    usernameEdit->setFocus();
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+
+    const QString username = usernameEdit->text().trimmed();
+    const QString token = tokenEdit->text().trimmed();
+    if (username.isEmpty()) {
+        QMessageBox::warning(this, tr("Remote authentication"), tr("Username cannot be empty."));
+        return false;
+    }
+    if (token.isEmpty()) {
+        QMessageBox::warning(this, tr("Remote authentication"), tr("Token cannot be empty."));
+        return false;
+    }
+
+    const GitProcessResult storeResult =
+        m_git.storeRemoteCredentials(m_repo.path(), url, username, token);
+    if (!storeResult.success()) {
+        QMessageBox::critical(
+            this, tr("Remote authentication"),
+            tr("%1\n\n%2").arg(m_git.lastError(), storeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    const GitProcessResult probeResult = m_git.probeRemote(m_repo.path(), remote);
+    if (!probeResult.success()) {
+        QMessageBox::critical(
+            this, tr("Remote authentication"),
+            tr("Saved credentials, but the remote is still unreachable.\n\n%1\n\n%2")
+                .arg(m_git.lastError(), probeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    return true;
+}
+
+bool MainWindow::ensureRemoteAuthentication(const QString &remote, const QString &reason)
+{
+    if (!m_repo.isValid() || remote.isEmpty()) {
+        return false;
+    }
+
+    const QString url = m_git.remoteUrl(m_repo.path(), remote, true);
+    if (url.isEmpty()) {
+        QMessageBox::critical(this, tr("Remote authentication"), m_git.lastError());
+        return false;
+    }
+
+    GitProcessResult probeResult = m_git.probeRemote(m_repo.path(), remote);
+    if (probeResult.success()) {
+        return true;
+    }
+
+    if (GitService::isHttpsRemoteUrl(url)) {
+        if (!m_git.hasRemoteCredentials(m_repo.path(), url)
+            || GitService::isRemoteAuthError(probeResult)) {
+            return promptRemoteCredentials(
+                remote,
+                reason.isEmpty()
+                    ? tr("Could not authenticate to remote \"%1\".").arg(remote)
+                    : reason);
+        }
+        QMessageBox::critical(
+            this, tr("Remote authentication"),
+            tr("%1\n\n%2")
+                .arg(m_git.lastError(), probeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    QMessageBox msgBox(this);
+    msgBox.setIcon(QMessageBox::Information);
+    msgBox.setWindowTitle(tr("SSH authentication"));
+    QString text = reason.isEmpty()
+                       ? tr("Could not authenticate to remote \"%1\".").arg(remote)
+                       : reason;
+    text += QStringLiteral("\n\n") + url;
+    text += QStringLiteral("\n\n")
+            + tr("For SSH remotes, add your public key to the hosting service "
+                 "(GitHub: Settings → SSH and GPG keys), then test in a terminal:\n"
+                 "ssh -T git@github.com");
+    msgBox.setText(text);
+    msgBox.setStandardButtons(QMessageBox::Retry | QMessageBox::Cancel);
+    if (msgBox.exec() != QMessageBox::Retry) {
+        return false;
+    }
+
+    probeResult = m_git.probeRemote(m_repo.path(), remote);
+    if (!probeResult.success()) {
+        QMessageBox::critical(
+            this, tr("SSH authentication"),
+            tr("%1\n\n%2")
+                .arg(m_git.lastError(), probeResult.stderrText.trimmed()));
+        return false;
+    }
+
+    return true;
+}
+
+bool MainWindow::executePush(const Branch &branch, const QString &remote, bool setUpstream,
+                             const QString &failureTitle, bool forceWithLease)
+{
+    if (!ensureRemoteAuthentication(remote)) {
+        return false;
+    }
+
+    auto runPush = [&]() -> GitProcessResult {
+        return setUpstream ? m_git.publishBranch(m_repo.path(), branch.name, remote)
+                           : m_git.pushBranch(m_repo.path(), branch.name, remote, forceWithLease);
+    };
+
+    GitProcessResult result = runPush();
+    if (!result.success() && GitService::isRemoteAuthError(result)) {
+        if (promptRemoteCredentials(
+                remote, tr("Authentication failed while pushing to \"%1\".").arg(remote))) {
+            result = runPush();
+        }
+    }
+
+    if (!result.success()) {
+        QStringList parts;
+        for (const QString &part :
+             {m_git.lastError(), result.stderrText.trimmed(), result.stdoutText.trimmed()}) {
+            if (!part.isEmpty()) {
+                parts << part;
+            }
+        }
+        QMessageBox::critical(this, failureTitle, parts.join(QStringLiteral("\n\n")));
+        return false;
+    }
+
+    return true;
+}
+
+void MainWindow::configureRemotes()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Remotes"), tr("Open a repository first."));
+        return;
+    }
+
+    RemotesDialog dialog(m_repo.path(), &m_git, this);
+    dialog.exec();
+    if (dialog.wasModified()) {
+        refreshRepository();
+    }
+}
+
+void MainWindow::publishOrPushSelectedBranch()
+{
+    const Branch branch = branchForActions();
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Publish branch"),
+                                 tr("Open a repository and select a local branch."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Publish branch"),
+                                 tr("Select a local branch to publish."));
+        return;
+    }
+
+    if (branch.hasUpstream()) {
+        pushBranch(branch);
+    } else {
+        publishBranch(branch);
     }
 }
 
 void MainWindow::reloadLog(const QString &branchFilter)
 {
-    m_branchFilter = branchFilter;
+    QString filter = branchFilter;
+    if (GitService::isPseudoDetachedBranchName(filter)) {
+        filter.clear();
+    }
+    m_branchFilter = filter;
 
     std::vector<Commit> commits;
-    if (branchFilter.isEmpty()) {
+    if (filter.isEmpty()) {
         commits = m_git.logAll(m_repo.path(), m_logLimit);
     } else {
-        commits = m_git.logBranch(m_repo.path(), branchFilter, m_logLimit);
+        commits = m_git.logBranch(m_repo.path(), filter, m_logLimit);
     }
 
     if (commits.empty() && !m_git.lastError().isEmpty()) {
@@ -542,12 +2129,37 @@ void MainWindow::reloadLog(const QString &branchFilter)
         return;
     }
 
-    m_historyView->setCommits(commits);
-    m_loadMoreButton->setEnabled(static_cast<int>(commits.size()) >= m_logLimit);
+    const QString branchTip = filter.isEmpty() || commits.empty() ? QString() : commits.front().hash;
+    m_historyView->setCommits(commits, branchTip, m_branches);
+    const int shown = static_cast<int>(commits.size());
+    const int total = m_git.commitCount(m_repo.path(), filter);
+    const bool hasMore = shown >= m_logLimit && (total == 0 || shown < total);
+    m_loadMoreButton->setEnabled(hasMore);
+    if (m_loadAllButton) {
+        m_loadAllButton->setEnabled(hasMore);
+    }
+    if (m_showAllCommitsButton) {
+        m_showAllCommitsButton->setVisible(!filter.isEmpty());
+    }
 
-    setStatusMessage(tr("%1 commits shown (limit %2)")
-                         .arg(commits.size())
-                         .arg(m_logLimit));
+    if (filter.isEmpty()) {
+        if (total > 0 && shown < total) {
+            setStatusMessage(tr("%1 of %2 commits shown (limit %3)")
+                                 .arg(shown)
+                                 .arg(total)
+                                 .arg(m_logLimit));
+        } else {
+            setStatusMessage(tr("%1 commits shown").arg(shown));
+        }
+    } else if (total > 0 && shown < total) {
+        setStatusMessage(tr("%1 of %2 commits on \"%3\" (limit %4)")
+                             .arg(shown)
+                             .arg(total)
+                             .arg(filter)
+                             .arg(m_logLimit));
+    } else {
+        setStatusMessage(tr("%1 commits on \"%2\"").arg(shown).arg(filter));
+    }
 
     if (!commits.empty()) {
         showCommitDetails(commits.front().hash);
@@ -562,9 +2174,41 @@ void MainWindow::loadMoreCommits()
     reloadLog(m_branchFilter);
 }
 
+void MainWindow::loadAllCommits()
+{
+    const int total = m_git.commitCount(m_repo.path(), m_branchFilter);
+    m_logLimit = total > 0 ? total : m_logLimit + kLogPageSize * 10;
+    reloadLog(m_branchFilter);
+}
+
+void MainWindow::showAllCommits()
+{
+    m_logLimit = kInitialLogLimit;
+    if (m_branchList) {
+        m_branchList->blockSignals(true);
+        m_branchList->clearSelection();
+        m_branchList->blockSignals(false);
+    }
+    m_branchFilter.clear();
+    reloadLog();
+}
+
+void MainWindow::filterLogToBranch(int row)
+{
+    onBranchSelected(row);
+}
+
 void MainWindow::onCommitSelected(const QString &hash)
 {
     showCommitDetails(hash);
+}
+
+void MainWindow::focusCommitDetails(const QString &hash)
+{
+    if (!m_repo.isValid() || hash.isEmpty()) {
+        return;
+    }
+    CommitDetailsDialog::open(this, &m_git, m_repo.path(), hash);
 }
 
 void MainWindow::showCommitDetails(const QString &hash)
@@ -584,15 +2228,29 @@ void MainWindow::showCommitDetails(const QString &hash)
 
 void MainWindow::onBranchSelected(int row)
 {
-    if (!m_repo.isValid() || row < 0) {
+    if (m_syncingBranchList) {
+        return;
+    }
+
+    updateBranchActions();
+
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    if (row < 0) {
         m_branchFilter.clear();
-        if (m_repo.isValid()) {
-            reloadLog();
-        }
+        m_logLimit = kInitialLogLimit;
+        reloadLog();
         return;
     }
 
     const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    m_logLimit = kInitialLogLimit;
     reloadLog(branch.name);
 }
 
@@ -602,6 +2260,793 @@ Branch MainWindow::branchAtRow(int row) const
         return m_branches[static_cast<size_t>(row)];
     }
     return {};
+}
+
+namespace {
+
+bool branchDeleteNeedsForce(const GitProcessResult &result)
+{
+    return result.stderrText.contains(QStringLiteral("not fully merged"), Qt::CaseInsensitive);
+}
+
+} // namespace
+
+void MainWindow::deleteBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Delete branch"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isCurrent) {
+        QMessageBox::warning(
+            this, tr("Delete branch"),
+            tr("Cannot delete the current branch \"%1\".\nSwitch to another branch first.")
+                .arg(branch.name));
+        return;
+    }
+
+    QString prompt;
+    if (branch.isRemote) {
+        const int slash = branch.name.indexOf(QLatin1Char('/'));
+        const QString remote = slash > 0 ? branch.name.left(slash) : branch.name;
+        const QString name = slash > 0 ? branch.name.mid(slash + 1) : QString();
+        prompt = tr("Delete remote branch \"%1\" on \"%2\"?\n\n"
+                    "This runs: git push %2 --delete %3")
+                     .arg(branch.name, remote, name);
+    } else {
+        prompt = tr("Delete local branch \"%1\"?\n\n"
+                    "If it is not fully merged, you will be asked to force delete.")
+            .arg(branch.name);
+    }
+
+    const auto answer =
+        QMessageBox::warning(this, tr("Delete branch"), prompt, QMessageBox::Yes | QMessageBox::No,
+                             QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    GitProcessResult result =
+        m_git.deleteBranch(m_repo.path(), branch.name, branch.isRemote, false);
+
+    if (!result.success() && !branch.isRemote && branchDeleteNeedsForce(result)) {
+        const auto forceAnswer = QMessageBox::warning(
+            this, tr("Delete branch"),
+            tr("Branch \"%1\" is not fully merged.\nForce delete anyway?").arg(branch.name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (forceAnswer == QMessageBox::Yes) {
+            result = m_git.deleteBranch(m_repo.path(), branch.name, false, true);
+        }
+    }
+
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Delete branch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    if (m_branchFilter == branch.name) {
+        m_branchFilter.clear();
+    }
+
+    QMessageBox::information(this, tr("Delete branch"),
+                             tr("Branch \"%1\" was deleted.").arg(branch.name));
+    refreshRepository();
+}
+
+QString MainWindow::promptAddRemote(const QString &title)
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(title);
+    dialog.resize(520, 200);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("No git remotes configured yet."), &dialog));
+    layout->addWidget(new QLabel(tr("Remote name:"), &dialog));
+
+    auto *nameEdit = new QLineEdit(QStringLiteral("origin"), &dialog);
+    layout->addWidget(nameEdit);
+
+    layout->addWidget(new QLabel(tr("Repository URL:"), &dialog));
+    auto *urlEdit = new QLineEdit(&dialog);
+    urlEdit->setPlaceholderText(tr("https://github.com/user/repo.git"));
+    urlEdit->setClearButtonEnabled(true);
+    layout->addWidget(urlEdit);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    urlEdit->setFocus();
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return {};
+    }
+
+    const QString name = nameEdit->text().trimmed();
+    const QString url = urlEdit->text().trimmed();
+
+    const QString nameError = m_git.validateRemoteName(name);
+    if (!nameError.isEmpty()) {
+        QMessageBox::warning(this, title, nameError);
+        return {};
+    }
+
+    if (url.isEmpty()) {
+        QMessageBox::warning(this, title, tr("Repository URL is empty"));
+        return {};
+    }
+
+    const GitProcessResult result = m_git.addRemote(m_repo.path(), name, url);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, title,
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return {};
+    }
+
+    refreshRepository();
+    return name;
+}
+
+QString MainWindow::pickRemoteForFetch(const QString &title)
+{
+    QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        const QString added = promptAddRemote(title);
+        if (added.isEmpty()) {
+            return {};
+        }
+        remoteList = m_git.remotes(m_repo.path());
+    }
+
+    if (remoteList.size() == 1) {
+        return remoteList.first();
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(title);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Fetch from:"), &dialog));
+
+    auto *remoteCombo = new QComboBox(&dialog);
+    remoteCombo->addItem(tr("All remotes"), QStringLiteral("*"));
+    for (const QString &name : remoteList) {
+        remoteCombo->addItem(name, name);
+    }
+    const int defaultIndex = remoteList.indexOf(m_git.defaultRemote(m_repo.path()));
+    remoteCombo->setCurrentIndex(defaultIndex >= 0 ? defaultIndex + 1 : 0);
+    layout->addWidget(remoteCombo);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return {};
+    }
+
+    return remoteCombo->currentData().toString();
+}
+
+QString MainWindow::pickRemoteForBranch(const Branch &branch, const QString &title)
+{
+    QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        const QString added = promptAddRemote(title);
+        if (added.isEmpty()) {
+            return {};
+        }
+        return added;
+    }
+
+    QString remote = m_git.defaultRemote(m_repo.path());
+    if (remoteList.size() > 1) {
+        QDialog dialog(this);
+        dialog.setWindowTitle(title);
+
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->addWidget(new QLabel(tr("Remote for branch \"%1\".").arg(branch.name), &dialog));
+
+        auto *remoteCombo = new QComboBox(&dialog);
+        for (const QString &name : remoteList) {
+            remoteCombo->addItem(name);
+        }
+        const int defaultIndex = remoteList.indexOf(m_git.defaultRemote(m_repo.path()));
+        remoteCombo->setCurrentIndex(defaultIndex >= 0 ? defaultIndex : 0);
+        layout->addWidget(remoteCombo);
+
+        auto *buttons =
+            new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+
+        if (dialog.exec() != QDialog::Accepted) {
+            return {};
+        }
+        remote = remoteCombo->currentText();
+    }
+
+    return remote;
+}
+
+void MainWindow::publishBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Publish branch"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Publish branch"),
+                               tr("Remote-tracking branches cannot be published."));
+        return;
+    }
+
+    if (branch.hasUpstream()) {
+        QMessageBox::information(
+            this, tr("Publish branch"),
+            tr("Branch \"%1\" already tracks %2.\nUse \"Push branch…\" to upload new commits.")
+                .arg(branch.name, branch.upstream));
+        return;
+    }
+
+    const QString remote = pickRemoteForBranch(branch, tr("Publish branch"));
+    if (remote.isEmpty()) {
+        return;
+    }
+
+    const auto answer = QMessageBox::question(
+        this, tr("First publish"),
+        tr("First publish of branch \"%1\" to \"%2\"?\n\n"
+           "This runs: git push -u %2 %1")
+            .arg(branch.name, remote),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    if (!executePush(branch, remote, true, tr("Publish branch failed"))) {
+        return;
+    }
+
+    QMessageBox::information(
+        this, tr("First publish"),
+        tr("Branch \"%1\" published to %2.").arg(branch.name, remote));
+    refreshRepository();
+}
+
+Branch MainWindow::currentLocalBranch() const
+{
+    for (const Branch &branch : m_branches) {
+        if (branch.isCurrent && !branch.isRemote) {
+            return branch;
+        }
+    }
+
+    Branch fallback;
+    if (m_repo.isValid()) {
+        fallback.name = m_git.currentBranch(m_repo.path());
+        fallback.isCurrent = true;
+    }
+    return fallback;
+}
+
+bool MainWindow::pushBranchNoPrompt(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty() || branch.isRemote || !branch.hasUpstream()) {
+        return false;
+    }
+
+    QString remote;
+    const int slash = branch.upstream.indexOf(QLatin1Char('/'));
+    if (slash > 0) {
+        remote = branch.upstream.left(slash);
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remote.isEmpty() || !remoteList.contains(remote)) {
+        QMessageBox::critical(
+            this, tr("Push failed"),
+            tr("Cannot push: remote for upstream \"%1\" is not configured.")
+                .arg(branch.upstream));
+        return false;
+    }
+
+    return executePush(branch, remote, false, tr("Push after commit failed"));
+}
+
+void MainWindow::pushBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Push branch"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Push branch"),
+                               tr("Select a local branch to push."));
+        return;
+    }
+
+    if (!branch.hasUpstream()) {
+        QMessageBox::information(this, tr("Push branch"),
+                               tr("Branch \"%1\" is not published yet.\nUse \"First publish…\" first.")
+                                   .arg(branch.name));
+        return;
+    }
+
+    QString remote;
+    const int slash = branch.upstream.indexOf(QLatin1Char('/'));
+    if (slash > 0) {
+        remote = branch.upstream.left(slash);
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Push branch"),
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
+        return;
+    }
+
+    if (remote.isEmpty() || !remoteList.contains(remote) || remoteList.size() > 1) {
+        remote = pickRemoteForBranch(branch, tr("Push branch"));
+        if (remote.isEmpty()) {
+            return;
+        }
+    }
+
+    const auto answer = QMessageBox::question(
+        this, tr("Push branch"),
+        tr("Push commits from \"%1\" to \"%2\"?\n\n"
+           "This runs: git push %2 %1")
+            .arg(branch.name, remote),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    if (!executePush(branch, remote, false, tr("Push branch failed"))) {
+        return;
+    }
+
+    QMessageBox::information(
+        this, tr("Push branch"),
+        tr("Branch \"%1\" pushed to %2.").arg(branch.name, remote));
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::fetchRemotes()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Fetch"), tr("Open a repository first."));
+        return;
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Fetch"),
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
+        return;
+    }
+
+    const QString selection = pickRemoteForFetch(tr("Fetch"));
+    if (selection.isEmpty()) {
+        return;
+    }
+
+    const bool fetchAll = (selection == QLatin1String("*"));
+    const auto answer = QMessageBox::question(
+        this, tr("Fetch"),
+        fetchAll ? tr("Fetch updates from all remotes?\n\n"
+                      "Deleted remote branches will be removed from the list.\n"
+                      "This runs: git fetch --all --prune")
+                 : tr("Fetch updates from \"%1\"?\n\n"
+                      "Deleted remote branches will be removed from the list.\n"
+                      "This runs: git fetch --prune %1")
+                      .arg(selection),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const GitProcessResult result =
+        fetchAll ? m_git.fetchAll(m_repo.path()) : m_git.fetchRemote(m_repo.path(), selection);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Fetch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    QMessageBox::information(
+        this, tr("Fetch"),
+        output.isEmpty()
+            ? (fetchAll ? tr("All remotes are up to date.") : tr("Remote \"%1\" is up to date.").arg(selection))
+            : output);
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::pullCurrentBranch()
+{
+    const Branch branch = currentLocalBranch();
+    if (branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Pull"), tr("Open a repository with a local branch."));
+        return;
+    }
+    pullBranch(branch);
+}
+
+void MainWindow::pullBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        QMessageBox::information(this, tr("Pull"), tr("Open a repository first."));
+        return;
+    }
+
+    if (branch.isRemote) {
+        QMessageBox::information(this, tr("Pull"),
+                                 tr("Select a local branch to pull into."));
+        return;
+    }
+
+    const QString current = m_git.currentBranch(m_repo.path());
+    if (!branch.isCurrent && branch.name != current) {
+        QMessageBox::information(
+            this, tr("Pull"),
+            tr("Pull updates the current branch.\n"
+               "Checkout \"%1\" first (current branch is \"%2\").")
+                .arg(branch.name, current));
+        return;
+    }
+
+    const QStringList remoteList = m_git.remotes(m_repo.path());
+    if (remoteList.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Pull"),
+            tr("No git remotes configured.\nUse Repository → Configure remotes… to add one."));
+        return;
+    }
+
+    QString remote;
+    QString remoteBranch;
+    if (branch.hasUpstream()) {
+        const int slash = branch.upstream.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            remote = branch.upstream.left(slash);
+            remoteBranch = branch.upstream.mid(slash + 1);
+        }
+    }
+
+    if (remote.isEmpty() || !remoteList.contains(remote) || remoteBranch.isEmpty()) {
+        remote = pickRemoteForBranch(branch, tr("Pull branch"));
+        if (remote.isEmpty()) {
+            return;
+        }
+        remoteBranch = branch.name;
+    } else if (remoteList.size() > 1 && !remoteList.contains(remote)) {
+        remote = pickRemoteForBranch(branch, tr("Pull branch"));
+        if (remote.isEmpty()) {
+            return;
+        }
+        remoteBranch = branch.name;
+    }
+
+    if (m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto answer = QMessageBox::warning(
+            this, tr("Pull"),
+            tr("The working tree has uncommitted changes. Pull may create merge conflicts.\n\n"
+               "Continue with pull from %1/%2 into \"%3\"?")
+                .arg(remote, remoteBranch, branch.name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    } else {
+        const auto answer = QMessageBox::question(
+            this, tr("Pull"),
+            tr("Pull from %1/%2 into \"%3\"?\n\n"
+               "Deleted remote branches will be removed from the list.\n"
+               "This runs: git pull --prune %1 %2")
+                .arg(remote, remoteBranch, branch.name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    const GitProcessResult result =
+        m_git.pullBranch(m_repo.path(), remote, remoteBranch);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Pull failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed() + result.stderrText.trimmed();
+    QMessageBox::information(
+        this, tr("Pull"),
+        output.isEmpty()
+            ? tr("Branch \"%1\" is up to date with %2/%3.").arg(branch.name, remote, remoteBranch)
+            : output);
+    QTimer::singleShot(0, this, &MainWindow::refreshRepository);
+}
+
+void MainWindow::checkoutSelectedBranch()
+{
+    const int row = m_branchList ? m_branchList->currentRow() : -1;
+    if (row < 0) {
+        QMessageBox::information(this, tr("Checkout"), tr("Select a branch first."));
+        return;
+    }
+
+    const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    checkoutBranch(branch);
+}
+
+void MainWindow::checkoutBranch(const Branch &branch)
+{
+    if (!m_repo.isValid() || branch.name.isEmpty()) {
+        return;
+    }
+
+    if (branch.isCurrent) {
+        return;
+    }
+
+    QString targetLabel = branch.name;
+    if (branch.isRemote) {
+        const int slash = branch.name.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            const QString localName = branch.name.mid(slash + 1);
+            if (m_git.branchExists(m_repo.path(), localName)) {
+                targetLabel = localName;
+            } else {
+                targetLabel =
+                    tr("%1 (new local branch tracking %2)").arg(localName, branch.name);
+            }
+        }
+    }
+
+    if (m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto answer = QMessageBox::warning(
+            this, tr("Checkout branch"),
+            tr("The working tree has uncommitted changes. Switch to \"%1\" anyway?")
+                .arg(targetLabel),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    const GitProcessResult result = m_git.checkoutBranch(m_repo.path(), branch.name);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Checkout failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    QString logFilter = branch.name;
+    if (branch.isRemote) {
+        const int slash = branch.name.indexOf(QLatin1Char('/'));
+        if (slash > 0) {
+            logFilter = branch.name.mid(slash + 1);
+        }
+    }
+    m_branchFilter = logFilter;
+    m_logLimit = kInitialLogLimit;
+    refreshRepository();
+}
+
+void MainWindow::showBranchContextMenu(const QPoint &pos)
+{
+    if (!m_repo.isValid()) {
+        return;
+    }
+
+    QListWidgetItem *item = m_branchList->itemAt(pos);
+    if (!item) {
+        return;
+    }
+
+    const int row = m_branchList->row(item);
+    if (row < 0) {
+        return;
+    }
+
+    m_branchList->setCurrentRow(row);
+    const Branch branch = branchAtRow(row);
+    if (branch.name.isEmpty()) {
+        return;
+    }
+
+    QMenu menu(this);
+
+    if (!branch.isCurrent) {
+        QString checkoutLabel = branch.name;
+        if (branch.isRemote) {
+            const int slash = branch.name.indexOf(QLatin1Char('/'));
+            if (slash > 0) {
+                const QString localName = branch.name.mid(slash + 1);
+                if (!m_git.branchExists(m_repo.path(), localName)) {
+                    checkoutLabel =
+                        tr("%1 (create local %2)").arg(branch.name, localName);
+                } else {
+                    checkoutLabel = localName;
+                }
+            }
+        }
+        menu.addAction(tr("Checkout \"%1\"…").arg(checkoutLabel), this,
+                       [this, branch]() { checkoutBranch(branch); });
+    }
+
+    const QString current = m_git.currentBranch(m_repo.path());
+    if (!branch.isCurrent && branch.name != current) {
+        const QString mergeTarget = m_git.displayBranchName(m_repo.path());
+        menu.addAction(tr("Merge into current (%1)…").arg(mergeTarget), this,
+                       &MainWindow::mergeSelectedBranch);
+    }
+
+    if (!m_branchFilter.isEmpty()) {
+        menu.addAction(tr("Show all commits"), this, &MainWindow::showAllCommits);
+    }
+
+    if (!branch.isRemote) {
+        if (branch.hasUpstream()) {
+            menu.addAction(tr("Pull branch…"), this, [this, branch]() { pullBranch(branch); });
+            menu.addAction(tr("Push branch…"), this, [this, branch]() { pushBranch(branch); });
+        } else {
+            menu.addAction(tr("Pull branch…"), this, [this, branch]() { pullBranch(branch); });
+            menu.addAction(tr("First publish…"), this,
+                           [this, branch]() { publishBranch(branch); });
+        }
+    }
+
+    menu.addSeparator();
+
+    QAction *deleteAction =
+        menu.addAction(tr("Delete branch…"), this, [this, branch]() { deleteBranch(branch); });
+    deleteAction->setEnabled(!branch.isCurrent);
+
+    menu.addSeparator();
+    menu.addAction(tr("New branch…"), this, [this]() { createBranch(); });
+
+    menu.exec(m_branchList->mapToGlobal(pos));
+}
+
+void MainWindow::createBranch(const QString &startPointHint)
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("New branch"), tr("Open a repository first."));
+        return;
+    }
+
+    const int row = m_branchList->currentRow();
+    const Branch selected = branchAtRow(row);
+    const QString current = m_git.currentBranch(m_repo.path());
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Create branch"));
+    dialog.resize(440, 220);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Branch name:"), &dialog));
+
+    auto *nameEdit = new QLineEdit(&dialog);
+    if (!selected.name.isEmpty() && !selected.isRemote) {
+        nameEdit->setText(selected.name + QStringLiteral("-copy"));
+    } else if (!startPointHint.isEmpty()) {
+        nameEdit->setText(QStringLiteral("branch-") + startPointHint.left(8));
+    }
+    layout->addWidget(nameEdit);
+
+    layout->addWidget(new QLabel(tr("Based on:"), &dialog));
+    auto *baseCombo = new QComboBox(&dialog);
+    int defaultBaseIndex = 0;
+    baseCombo->addItem(tr("Current branch (%1)").arg(current), QString());
+    if (!selected.name.isEmpty()) {
+        baseCombo->addItem(tr("Selected: %1").arg(selected.name), selected.name);
+    }
+    if (!startPointHint.isEmpty()) {
+        baseCombo->addItem(tr("Commit %1").arg(startPointHint.left(8)), startPointHint);
+        defaultBaseIndex = baseCombo->count() - 1;
+    }
+    baseCombo->setCurrentIndex(defaultBaseIndex);
+    layout->addWidget(baseCombo);
+
+    auto *checkoutCheck = new QCheckBox(tr("Switch to new branch after creation"), &dialog);
+    checkoutCheck->setChecked(true);
+    layout->addWidget(checkoutCheck);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString branchName = nameEdit->text().trimmed();
+    const QString validation = m_git.validateBranchName(m_repo.path(), branchName);
+    if (!validation.isEmpty()) {
+        QMessageBox::warning(this, tr("New branch"), validation);
+        return;
+    }
+
+    if (m_git.branchExists(m_repo.path(), branchName)) {
+        QMessageBox::warning(
+            this, tr("New branch"),
+            tr("Branch \"%1\" already exists. Choose another name or delete the existing branch.")
+                .arg(branchName));
+        return;
+    }
+
+    const QString startPoint = baseCombo->currentData().toString().trimmed();
+    const bool checkout = checkoutCheck->isChecked();
+
+    if (checkout && m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto answer = QMessageBox::warning(
+            this, tr("New branch"),
+            tr("The working tree has uncommitted changes. Switch branch anyway?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    GitProcessResult result;
+    if (checkout) {
+        result = m_git.createBranchAndCheckout(m_repo.path(), branchName, startPoint);
+    } else {
+        result = m_git.createBranch(m_repo.path(), branchName, startPoint);
+    }
+
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("New branch failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    const QString output = result.stdoutText.trimmed();
+    QMessageBox::information(
+        this, tr("New branch"),
+        output.isEmpty() ? tr("Branch \"%1\" created.").arg(branchName) : output);
+    refreshRepository();
+
+    if (checkout && !m_git.remotes(m_repo.path()).isEmpty()) {
+        Branch branch;
+        branch.name = branchName;
+        branch.isCurrent = true;
+        const auto publishAnswer = QMessageBox::question(
+            this, tr("First publish"),
+            tr("Publish new branch \"%1\" to a remote now?\n\n"
+               "This is the first push (git push -u).")
+                .arg(branchName),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (publishAnswer == QMessageBox::Yes) {
+            publishBranch(branch);
+        }
+    }
 }
 
 void MainWindow::mergeSelectedBranch()
@@ -689,15 +3134,92 @@ void MainWindow::mergeSelectedBranch()
     }
 }
 
-void MainWindow::loadRecentRepos()
+QStringList MainWindow::recentRepos() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("recent"));
     const QStringList recent = settings.value(QStringLiteral("repos")).toStringList();
     settings.endGroup();
-    if (!recent.isEmpty() && !m_repo.isValid()) {
-        setStatusMessage(tr("Recent: %1").arg(recent.first()));
+    return recent;
+}
+
+void MainWindow::loadRecentRepos()
+{
+    updateRecentReposMenu();
+    QTimer::singleShot(0, this, &MainWindow::restoreLastRepository);
+}
+
+void MainWindow::restoreLastRepository()
+{
+    if (m_repo.isValid()) {
+        return;
     }
+
+    for (const QString &path : recentRepos()) {
+        if (!QFileInfo::exists(path)) {
+            removeInvalidRecentRepo(path);
+            continue;
+        }
+
+        const QString topLevel = m_git.discoverGitDir(path);
+        if (topLevel.isEmpty()) {
+            removeInvalidRecentRepo(path);
+            continue;
+        }
+
+        setRepository(path);
+        return;
+    }
+
+    setStatusMessage(tr("Open a repository to begin"));
+}
+
+void MainWindow::updateRecentReposMenu()
+{
+    if (!m_recentReposMenu) {
+        return;
+    }
+
+    m_recentReposMenu->clear();
+    const QStringList recent = recentRepos();
+    if (recent.isEmpty()) {
+        auto *emptyAction = m_recentReposMenu->addAction(tr("(No recent repositories)"));
+        emptyAction->setEnabled(false);
+        m_recentReposMenu->setEnabled(false);
+        return;
+    }
+
+    m_recentReposMenu->setEnabled(true);
+    for (const QString &path : recent) {
+        QAction *action = m_recentReposMenu->addAction(QDir::toNativeSeparators(path));
+        action->setToolTip(path);
+        action->setStatusTip(path);
+        connect(action, &QAction::triggered, this, [this, path]() { setRepository(path); });
+    }
+
+    m_recentReposMenu->addSeparator();
+    m_recentReposMenu->addAction(tr("Clear list…"), this, [this]() { clearRecentRepos(); });
+}
+
+void MainWindow::clearRecentRepos()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("recent"));
+    settings.remove(QStringLiteral("repos"));
+    settings.endGroup();
+    updateRecentReposMenu();
+    setStatusMessage(tr("Recent repositories list cleared"));
+}
+
+void MainWindow::removeInvalidRecentRepo(const QString &path)
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("recent"));
+    QStringList recent = settings.value(QStringLiteral("repos")).toStringList();
+    recent.removeAll(path);
+    settings.setValue(QStringLiteral("repos"), recent);
+    settings.endGroup();
+    updateRecentReposMenu();
 }
 
 void MainWindow::saveRecentRepo(const QString &path)
@@ -711,10 +3233,41 @@ void MainWindow::saveRecentRepo(const QString &path)
         recent.removeLast();
     }
     settings.setValue(QStringLiteral("repos"), recent);
+    settings.setValue(QStringLiteral("last"), path);
     settings.endGroup();
+    updateRecentReposMenu();
 }
 
 void MainWindow::setStatusMessage(const QString &message)
 {
-    m_statusLabel->setText(message);
+    if (!m_repo.isValid()) {
+        m_statusLabel->setText(message);
+        return;
+    }
+
+    QStringList extras;
+    const QString branch = m_git.currentBranch(m_repo.path());
+    if (!branch.isEmpty()) {
+        extras << branch;
+    }
+
+    const BranchSyncCounts sync = m_git.currentBranchSyncCounts(m_repo.path());
+    if (sync.valid && !sync.upstream.isEmpty()) {
+        if (sync.ahead == 0) {
+            extras << tr("no unpushed commits");
+        } else {
+            extras << tr("%n unpushed commit(s)", nullptr, sync.ahead);
+        }
+        if (sync.behind > 0) {
+            extras << tr("%n commit(s) behind", nullptr, sync.behind);
+        }
+        extras << sync.upstream;
+    }
+
+    if (extras.isEmpty()) {
+        m_statusLabel->setText(message);
+        return;
+    }
+
+    m_statusLabel->setText(message + QStringLiteral(" — ") + extras.join(QStringLiteral(" — ")));
 }
