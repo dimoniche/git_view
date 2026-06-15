@@ -37,6 +37,25 @@ cmake --build build
 
 On macOS, pass `CMAKE_PREFIX_PATH` if Qt is not found automatically (see above).
 
+### macOS package (.dmg)
+
+Build a self-contained `.app` with bundled Qt libraries:
+
+```bash
+brew install qt@6 cmake git
+chmod +x packaging/build-macos.sh
+./packaging/build-macos.sh
+open dist/git_view-*-macos.dmg
+```
+
+Drag **git_view.app** to **Applications**. Git must be available in `PATH` (Xcode Command Line Tools or `brew install git`).
+
+Run without installing:
+
+```bash
+open build-macos/src/git_view.app
+```
+
 ## Terminal
 
 The bottom panel is a **real interactive terminal** (PTY + VT100 emulator): you can run `git`, `vim`, `htop`, pagers, and full-screen programs. Working directory is the repository root. Press **Ctrl+`** to focus it.

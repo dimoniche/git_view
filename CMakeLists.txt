@@ -37,7 +37,7 @@ endif()
 
 add_subdirectory(src)
 
-if(UNIX)
+if(UNIX AND NOT APPLE)
     add_subdirectory(integrations)
 endif()
 

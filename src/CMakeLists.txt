@@ -50,4 +50,17 @@ if(UNIX)
     target_compile_definitions(git_view PRIVATE GIT_VIEW_PTY_TERMINAL=1)
 endif()
 
-install(TARGETS git_view RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(APPLE)
+    set_target_properties(git_view PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.gitview.app"
+        MACOSX_BUNDLE_BUNDLE_NAME "git_view"
+        MACOSX_BUNDLE_DISPLAY_NAME "git_view"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_COPYRIGHT "Copyright © git_view contributors"
+    )
+    install(TARGETS git_view BUNDLE DESTINATION .)
+else()
+    install(TARGETS git_view RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()

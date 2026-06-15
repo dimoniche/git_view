@@ -27,3 +27,8 @@ debian/*.substvars
 ../*.changes
 ../*.dsc
 obj-x86_64-linux-gnu
+
+# macOS package build artifacts
+build-macos/
+dist/
+*.dmg
