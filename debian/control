@@ -1,0 +1,37 @@
+Source: git-view
+Section: vcs
+Priority: optional
+Maintainer: git_view <git_view@localhost>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               g++,
+               qt6-base-dev,
+               git,
+               pkg-config
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/example/git_view
+Vcs-Git: https://github.com/example/git_view.git
+Vcs-Browser: https://github.com/example/git_view
+
+Package: git-view
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         git,
+         python3
+Recommends: nautilus,
+            python3-nautilus,
+            python3-gi,
+            zenity
+Description: minimal Git GUI for Linux with Nautilus integration
+ git_view is a Qt 6 application for viewing branch history, working tree
+ changes, commits, merges, and remotes. It wraps the system git CLI.
+ .
+ This package installs:
+  * git_view — desktop application and /usr/bin launcher
+  * Nautilus Scripts → GitView submenu (works in any file manager session)
+  * Nautilus Python extension for TortoiseGit-style context menu items
+    when python3-nautilus is installed
+ .
+ After installation, restart Nautilus: nautilus -q

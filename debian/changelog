@@ -1,0 +1,5 @@
+git-view (0.1.0-1) unstable; urgency=medium
+
+  * Initial Debian package with Nautilus integration.
+
+ -- git_view <git_view@localhost>  Sun, 08 Jun 2025 12:00:00 +0000

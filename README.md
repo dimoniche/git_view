@@ -68,6 +68,32 @@ Actions: `open`, `working-changes`, `file-history`, `file-diff`, `commit`, `log`
 
 ## File manager integration (Ubuntu / Nautilus)
 
+### Debian package (recommended on Ubuntu)
+
+```bash
+sudo apt install build-essential devscripts debhelper cmake g++ qt6-base-dev
+./packaging/build-deb.sh
+sudo apt install ./git-view_*.deb
+nautilus -q
+```
+
+The package installs:
+
+| Component | Path |
+|-----------|------|
+| Application | `/usr/bin/git_view` |
+| Menu entry | Applications → Development → git_view |
+| Nautilus scripts | **Scripts → GitView** |
+| Context menu extension | main menu (needs `python3-nautilus`, recommended) |
+
+Recommended packages for full Nautilus menu:
+
+```bash
+sudo apt install nautilus python3-nautilus python3-gi zenity
+```
+
+### Manual install (from source tree)
+
 TortoiseGit-style context menu for git repositories:
 
 ```bash
@@ -79,7 +105,7 @@ nautilus -q
 - **Scripts → GitView** — works without extra packages.
 - **Direct context menu items** — install `python3-nautilus`, then re-run the installer.
 
-Configuration: `~/.config/git_view/integration.conf` (`GIT_VIEW_BIN`).
+Configuration (manual install only): `~/.config/git_view/integration.conf` (`GIT_VIEW_BIN`).
 
 ## Features (current)
 

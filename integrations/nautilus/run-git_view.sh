@@ -3,7 +3,10 @@ set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-"$HOME/.config"}/git_view/integration.conf"
 GIT_VIEW_BIN=""
-URI_HELPER="${HOME}/.local/share/git_view/uri_to_path.py"
+URI_HELPER="/usr/share/git_view/uri_to_path.py"
+if [[ ! -f "$URI_HELPER" ]]; then
+    URI_HELPER="${HOME}/.local/share/git_view/uri_to_path.py"
+fi
 
 if [[ -f "$CONFIG" ]]; then
     # shellcheck disable=SC1090
@@ -18,7 +21,7 @@ fi
 
 if [[ -z "${GIT_VIEW_BIN:-}" || ! -x "$GIT_VIEW_BIN" ]]; then
     if command -v zenity >/dev/null 2>&1; then
-        zenity --error --text="git_view not found.\n\nRun integrations/install-nautilus-integration.sh and set GIT_VIEW_BIN in:\n$CONFIG"
+        zenity --error --text="git_view not found.\n\nInstall the git-view package or set GIT_VIEW_BIN in:\n$CONFIG"
     else
         echo "git_view binary not found. Set GIT_VIEW_BIN in $CONFIG" >&2
     fi

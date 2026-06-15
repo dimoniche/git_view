@@ -34,6 +34,8 @@ set(GIT_VIEW_SOURCES
     ui/SourceCodeView.cpp
 )
 
+include(GNUInstallDirs)
+
 add_executable(git_view ${GIT_VIEW_SOURCES})
 
 target_include_directories(git_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -45,4 +47,4 @@ if(UNIX)
     target_compile_definitions(git_view PRIVATE GIT_VIEW_PTY_TERMINAL=1)
 endif()
 
-install(TARGETS git_view RUNTIME DESTINATION bin)
+install(TARGETS git_view RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

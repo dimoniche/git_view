@@ -12,3 +12,17 @@ moc_*.cpp
 ui_*.h
 qrc_*.cpp
 .git_view_recent
+
+# Debian package build artifacts
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/git-view/
+debian/*.debhelper
+debian/*.log
+debian/*.substvars
+../*.deb
+../*.ddeb
+../*.buildinfo
+../*.changes
+../*.dsc

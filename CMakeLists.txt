@@ -26,6 +26,10 @@ endif()
 
 add_subdirectory(src)
 
+if(UNIX)
+    add_subdirectory(integrations)
+endif()
+
 option(GIT_VIEW_BUILD_TESTS "Build unit tests" ON)
 if(GIT_VIEW_BUILD_TESTS)
     enable_testing()

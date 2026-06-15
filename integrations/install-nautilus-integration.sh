@@ -47,12 +47,19 @@ PYTHON_EXT_DIR="$HOME/.local/share/nautilus-python/extensions"
 mkdir -p "$CONFIG_DIR" "$LAUNCHER_DIR" "$SCRIPTS_DIR"
 cp "$ROOT/integrations/nautilus/run-git_view.sh" "$LAUNCHER_DIR/run-git_view.sh"
 cp "$ROOT/integrations/nautilus/uri_to_path.py" "$LAUNCHER_DIR/uri_to_path.py"
-chmod +x "$LAUNCHER_DIR/run-git_view.sh" "$LAUNCHER_DIR/uri_to_path.py"
+cp "$ROOT/integrations/nautilus/nautilus-action.sh" "$LAUNCHER_DIR/nautilus-action.sh"
+chmod +x "$LAUNCHER_DIR/run-git_view.sh" "$LAUNCHER_DIR/uri_to_path.py" "$LAUNCHER_DIR/nautilus-action.sh"
 
 for script in "$ROOT/integrations/nautilus/scripts/"*; do
+    base="$(basename "$script")"
+    if [[ "$base" == "_git_view_action.sh" ]]; then
+        continue
+    fi
     cp "$script" "$SCRIPTS_DIR/"
-    chmod +x "$SCRIPTS_DIR/$(basename "$script")"
+    chmod +x "$SCRIPTS_DIR/$base"
 done
+cp "$ROOT/integrations/nautilus/scripts/_git_view_action.sh" "$SCRIPTS_DIR/_git_view_action.sh"
+chmod +x "$SCRIPTS_DIR/_git_view_action.sh"
 
 cat >"$CONFIG_FILE" <<EOF
 # git_view file manager integration
