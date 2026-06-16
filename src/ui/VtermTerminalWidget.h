@@ -7,6 +7,7 @@
 #include <vterm.h>
 
 class PtySession;
+class QKeyEvent;
 
 class VtermTerminalWidget : public QWidget {
     Q_OBJECT
@@ -46,6 +47,7 @@ private:
     void onPtyExited(int exitCode);
     void updateTerminalSize(bool force = false);
     void sendKey(VTermKey key, VTermModifier mod);
+    bool sendControlCharacter(QKeyEvent *event);
     void clearScrollback();
     bool scrollbackPush(int cols, const VTermScreenCell *cells);
     bool scrollbackPop(int cols, VTermScreenCell *cells);

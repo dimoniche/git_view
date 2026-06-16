@@ -90,7 +90,16 @@ bool PtySession::start(const QString &workingDirectory, const QString &shellProg
         setenv("TERM", "xterm-256color", 1);
         setenv("COLORTERM", "truecolor", 1);
 
-        execl(shellBytes.constData(), shellBytes.constData(), "-l", nullptr);
+        const QString shellBase = QFileInfo(shell).fileName();
+        const bool interactiveShell =
+            shellBase == QStringLiteral("bash") || shellBase == QStringLiteral("zsh")
+            || shellBase == QStringLiteral("fish");
+
+        if (interactiveShell) {
+            execl(shellBytes.constData(), shellBytes.constData(), "-l", "-i", nullptr);
+        } else {
+            execl(shellBytes.constData(), shellBytes.constData(), "-l", nullptr);
+        }
         _exit(127);
     }
 

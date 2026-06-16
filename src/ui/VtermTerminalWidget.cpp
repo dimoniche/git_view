@@ -492,6 +492,80 @@ void VtermTerminalWidget::sendKey(VTermKey key, VTermModifier mod)
     vterm_keyboard_key(m_vterm, key, mod);
 }
 
+bool VtermTerminalWidget::sendControlCharacter(QKeyEvent *event)
+{
+    if (!m_vterm || !m_pty || !m_pty->isRunning()) {
+        return false;
+    }
+
+    const Qt::KeyboardModifiers qtMods = event->modifiers();
+    if (!(qtMods & Qt::ControlModifier) || (qtMods & Qt::AltModifier)) {
+        return false;
+    }
+
+    uint32_t controlChar = 0;
+    switch (event->key()) {
+    case Qt::Key_Space:
+        controlChar = 0;
+        break;
+    case Qt::Key_2:
+        if (qtMods & Qt::ShiftModifier) {
+            controlChar = 0; // Ctrl+@
+        } else {
+            return false;
+        }
+        break;
+    case Qt::Key_A:
+    case Qt::Key_B:
+    case Qt::Key_C:
+    case Qt::Key_D:
+    case Qt::Key_E:
+    case Qt::Key_F:
+    case Qt::Key_G:
+    case Qt::Key_H:
+    case Qt::Key_I:
+    case Qt::Key_J:
+    case Qt::Key_K:
+    case Qt::Key_L:
+    case Qt::Key_M:
+    case Qt::Key_N:
+    case Qt::Key_O:
+    case Qt::Key_P:
+    case Qt::Key_Q:
+    case Qt::Key_R:
+    case Qt::Key_S:
+    case Qt::Key_T:
+    case Qt::Key_U:
+    case Qt::Key_V:
+    case Qt::Key_W:
+    case Qt::Key_X:
+    case Qt::Key_Y:
+    case Qt::Key_Z:
+        controlChar = static_cast<uint32_t>(event->key() - Qt::Key_A + 1);
+        break;
+    case Qt::Key_BracketLeft:
+        controlChar = 27; // Ctrl+[
+        break;
+    case Qt::Key_Backslash:
+        controlChar = 28;
+        break;
+    case Qt::Key_BracketRight:
+        controlChar = 29;
+        break;
+    case Qt::Key_AsciiCircum:
+        controlChar = 30;
+        break;
+    case Qt::Key_Underscore:
+        controlChar = 31;
+        break;
+    default:
+        return false;
+    }
+
+    vterm_keyboard_unichar(m_vterm, controlChar, VTERM_MOD_NONE);
+    return true;
+}
+
 void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
 {
     if (!m_vterm || !m_pty || !m_pty->isRunning()) {
@@ -504,6 +578,11 @@ void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
         update();
     }
 
+    if (sendControlCharacter(event)) {
+        event->accept();
+        return;
+    }
+
     const VTermModifier mod = qtModifiersToVterm(event->modifiers());
     const VTermKey key = qtKeyToVterm(event->key());
 
@@ -514,9 +593,9 @@ void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
     }
 
     const QString text = event->text();
-    if (!text.isEmpty() && text.at(0).isPrint()) {
+    if (!text.isEmpty()) {
         const uint32_t codepoint = text.at(0).unicode();
-        vterm_keyboard_unichar(m_vterm, codepoint, mod);
+        vterm_keyboard_unichar(m_vterm, codepoint, VTERM_MOD_NONE);
         event->accept();
         return;
     }
