@@ -5,6 +5,7 @@
 #include <QFocusEvent>
 #include <QMetaObject>
 #include <QPointer>
+#include <QEvent>
 #include <QFont>
 #include <QTimer>
 #include <QFontMetrics>
@@ -483,6 +484,14 @@ void VtermTerminalWidget::paintCursor(QPainter &painter) const
     }
 }
 
+void VtermTerminalWidget::sendInputToPty(const QByteArray &data)
+{
+    if (!m_pty || !m_pty->isRunning() || data.isEmpty()) {
+        return;
+    }
+    m_pty->write(data);
+}
+
 void VtermTerminalWidget::sendKey(VTermKey key, VTermModifier mod)
 {
     if (!m_vterm || !m_pty || !m_pty->isRunning() || key == VTERM_KEY_NONE) {
@@ -566,6 +575,24 @@ bool VtermTerminalWidget::sendControlCharacter(QKeyEvent *event)
     return true;
 }
 
+bool VtermTerminalWidget::event(QEvent *event)
+{
+    if (event->type() == QEvent::ShortcutOverride) {
+        const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab) {
+            event->accept();
+        }
+    }
+
+    return QWidget::event(event);
+}
+
+bool VtermTerminalWidget::focusNextPrevChild(bool next)
+{
+    Q_UNUSED(next);
+    return false;
+}
+
 void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
 {
     if (!m_vterm || !m_pty || !m_pty->isRunning()) {
@@ -583,7 +610,18 @@ void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
         return;
     }
 
-    const VTermModifier mod = qtModifiersToVterm(event->modifiers());
+    const Qt::KeyboardModifiers mods = event->modifiers() & ~Qt::KeypadModifier;
+    if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) {
+        if (event->key() == Qt::Key_Backtab || (mods & Qt::ShiftModifier)) {
+            sendInputToPty("\033[Z");
+        } else {
+            sendInputToPty("\t");
+        }
+        event->accept();
+        return;
+    }
+
+    const VTermModifier mod = qtModifiersToVterm(mods);
     const VTermKey key = qtKeyToVterm(event->key());
 
     if (key != VTERM_KEY_NONE) {
@@ -594,6 +632,11 @@ void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
 
     const QString text = event->text();
     if (!text.isEmpty()) {
+        if (text == QLatin1String("\t")) {
+            sendInputToPty("\t");
+            event->accept();
+            return;
+        }
         const uint32_t codepoint = text.at(0).unicode();
         vterm_keyboard_unichar(m_vterm, codepoint, VTERM_MOD_NONE);
         event->accept();

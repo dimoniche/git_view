@@ -12,13 +12,21 @@ fi
 
 chmod +x debian/rules debian/postinst debian/postrm 2>/dev/null || true
 chmod +x integrations/nautilus/*.sh integrations/nautilus/scripts/* 2>/dev/null || true
+chmod +x packaging/sync-debian-version.sh
+chmod +x packaging/read-version.sh packaging/verify-macos-app-version.sh 2>/dev/null || true
 
-echo "Building git-view deb package..."
+echo "Syncing debian/changelog from VERSION..."
+"$(dirname "$0")/sync-debian-version.sh"
+
+UPSTREAM="$( "$(dirname "$0")/read-version.sh" )"
+echo "Building git-view deb package (upstream ${UPSTREAM})..."
 dpkg-buildpackage -us -uc -b
 
 PARENT="$(dirname "$ROOT")"
 echo
 echo "Done. Install with:"
-echo "  sudo apt install ./git-view_*.deb"
+echo "  sudo apt install ${PARENT}/git-view_${UPSTREAM}*.deb"
 echo
-ls -1 "$PARENT"/git-view_*.deb 2>/dev/null || ls -1 "$PARENT"/*.deb 2>/dev/null || true
+ls -lh "$PARENT"/git-view_"${UPSTREAM}"*.deb 2>/dev/null \
+    || ls -lh "$PARENT"/git-view_*.deb 2>/dev/null \
+    || true
