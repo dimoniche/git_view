@@ -7,6 +7,7 @@
 #include <vterm.h>
 
 class PtySession;
+class QKeyEvent;
 
 class VtermTerminalWidget : public QWidget {
     Q_OBJECT
@@ -26,6 +27,7 @@ signals:
 
 protected:
     QSize sizeHint() const override;
+    bool event(QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
@@ -34,6 +36,7 @@ protected:
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
+    bool focusNextPrevChild(bool next) override;
 
 private:
     static int onSbPushLine(int cols, const VTermScreenCell *cells, void *user);
@@ -46,6 +49,8 @@ private:
     void onPtyExited(int exitCode);
     void updateTerminalSize(bool force = false);
     void sendKey(VTermKey key, VTermModifier mod);
+    void sendInputToPty(const QByteArray &data);
+    bool sendControlCharacter(QKeyEvent *event);
     void clearScrollback();
     bool scrollbackPush(int cols, const VTermScreenCell *cells);
     bool scrollbackPop(int cols, VTermScreenCell *cells);

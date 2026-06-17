@@ -3,8 +3,14 @@
 Minimal Git GUI for Linux (Ubuntu), focused on branch history and merge operations.
 Built with **Qt 6** and the system **git** CLI.
 
-Application version is defined in [`VERSION`](VERSION) (used by CMake and the running app).
-For Debian packages, bump the upstream part in `debian/changelog` to match.
+Application version is defined in [`VERSION`](VERSION) (used by CMake, the running app, and package builds).
+
+| Platform | Build script | Version source |
+|----------|--------------|----------------|
+| Linux `.deb` | `./packaging/build-deb.sh` | `VERSION` → `debian/changelog` (auto) |
+| macOS `.dmg` | `./packaging/build-macos.sh` | `VERSION` → app `Info.plist` + DMG name (auto) |
+
+To release a new version, edit `VERSION` only, then rebuild the package.
 
 ## Requirements
 
@@ -39,7 +45,7 @@ On macOS, pass `CMAKE_PREFIX_PATH` if Qt is not found automatically (see above).
 
 ### macOS package (.dmg)
 
-Build a self-contained `.app` with bundled Qt libraries:
+Build a self-contained `.app` with bundled Qt libraries. Version is read from [`VERSION`](../VERSION); the output is `dist/git_view-<version>-macos.dmg`.
 
 ```bash
 brew install qt@6 cmake git

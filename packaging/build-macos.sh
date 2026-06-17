@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=read-version.sh
+source "$SCRIPT_DIR/read-version.sh"
+
 cd "$ROOT"
 
-VERSION="$(tr -d '[:space:]' < VERSION)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build-macos}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT/dist}"
 APP_NAME="git_view.app"
@@ -52,7 +54,7 @@ if [[ ! -x "$MACDEPLOYQT" ]]; then
 fi
 
 echo "Using Qt from: $QT_PREFIX"
-echo "Building $APP_NAME (version $VERSION)..."
+echo "Building $APP_NAME (version $VERSION from VERSION)..."
 
 cmake -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -66,6 +68,9 @@ if [[ ! -d "$APP_PATH" ]]; then
     exit 1
 fi
 
+chmod +x "$SCRIPT_DIR/verify-macos-app-version.sh"
+"$SCRIPT_DIR/verify-macos-app-version.sh" "$APP_PATH"
+
 echo "Bundling Qt frameworks with macdeployqt..."
 MACDEPLOYQT_ARGS=(-always-overwrite -codesign=-)
 if command -v brew >/dev/null 2>&1; then
@@ -75,6 +80,8 @@ if ! "$MACDEPLOYQT" "$APP_PATH" "${MACDEPLOYQT_ARGS[@]}"; then
     echo "Warning: macdeployqt reported errors; continuing if the app bundle exists." >&2
 fi
 
+"$SCRIPT_DIR/verify-macos-app-version.sh" "$APP_PATH"
+
 mkdir -p "$OUTPUT_DIR"
 STAGING="$BUILD_DIR/dmg-staging"
 rm -rf "$STAGING"
@@ -82,10 +89,10 @@ mkdir -p "$STAGING"
 cp -R "$APP_PATH" "$STAGING/"
 ln -sf /Applications "$STAGING/Applications"
 
-echo "Creating disk image..."
+echo "Creating disk image $DMG_NAME..."
 rm -f "$DMG_PATH"
 hdiutil create \
-    -volname "git_view" \
+    -volname "git_view $VERSION" \
     -srcfolder "$STAGING" \
     -ov \
     -format UDZO \
@@ -95,6 +102,7 @@ rm -rf "$STAGING"
 
 echo
 echo "Done."
+echo "  Version:    $VERSION"
 echo "  App bundle: $APP_PATH"
 echo "  Disk image: $DMG_PATH"
 echo
