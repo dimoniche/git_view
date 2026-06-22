@@ -100,6 +100,7 @@ private:
     void updateWorkingTreeActions();
     void updateBranchActions();
     void updateRepoLabel();
+    void updateWindowTitle();
     void setStatusMessage(const QString &message);
     Branch branchAtRow(int row) const;
     Branch branchForActions() const;

@@ -1490,8 +1490,13 @@ void MainWindow::updateWorkingTreeActions()
 
 void MainWindow::updateRepoLabel()
 {
+    if (!m_repoLabel) {
+        return;
+    }
+
     if (!m_repo.isValid()) {
         m_repoLabel->setText(tr("No repository"));
+        updateWindowTitle();
         return;
     }
 
@@ -1504,6 +1509,20 @@ void MainWindow::updateRepoLabel()
                 + QStringLiteral("</a>");
     }
     m_repoLabel->setText(html);
+    updateWindowTitle();
+}
+
+void MainWindow::updateWindowTitle()
+{
+    const QString appName = tr("git_view");
+    if (!m_repo.isValid()) {
+        setWindowTitle(appName);
+        return;
+    }
+
+    const QString repoName = QFileInfo(m_repo.path()).fileName();
+    const QString branch = m_git.displayBranchName(m_repo.path());
+    setWindowTitle(tr("%1 — %2 — %3").arg(appName, repoName, branch));
 }
 
 void MainWindow::refreshWorkingTree()
@@ -1573,6 +1592,7 @@ void MainWindow::reloadBranches()
     m_syncingBranchList = false;
 
     updateBranchActions();
+    updateWindowTitle();
 }
 
 void MainWindow::restoreBranchListSelection()
