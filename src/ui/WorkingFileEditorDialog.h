@@ -16,6 +16,16 @@ class WorkingFileEditorDialog : public QWidget {
 public:
     using SavedCallback = std::function<void()>;
 
+    struct OpenCheck {
+        bool canOpen = false;
+        bool binary = false;
+        QString error;
+    };
+
+    static OpenCheck checkEditable(GitService *git, const QString &repoPath,
+                                   const QString &relativePath, const WorkingTreeChange &change,
+                                   WorkingDiffScope scope);
+
     static void open(QWidget *parent, GitService *git, const QString &repoPath,
                      const QString &relativePath, const WorkingTreeChange &change,
                      WorkingDiffScope scope, SavedCallback onSaved = {});
@@ -33,6 +43,7 @@ private:
     bool confirmDiscard();
     void updateSaveState();
     QString absolutePath() const;
+    OpenCheck inspectContent() const;
 
     GitService *m_git = nullptr;
     QString m_repoPath;

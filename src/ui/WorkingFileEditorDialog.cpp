@@ -111,6 +111,25 @@ QFont editorMonospaceFont(const QFont &base)
 
 } // namespace
 
+WorkingFileEditorDialog::OpenCheck WorkingFileEditorDialog::checkEditable(
+    GitService *git, const QString &repoPath, const QString &relativePath,
+    const WorkingTreeChange &change, WorkingDiffScope scope)
+{
+    OpenCheck check;
+    const EditorLoadResult loaded = loadEditableContent(git, repoPath, relativePath, change, scope);
+    if (loaded.binary) {
+        check.binary = true;
+        check.error = WorkingFileEditorDialog::tr("Only text files can be edited.");
+        return check;
+    }
+    if (!loaded.ok) {
+        check.error = loaded.error;
+        return check;
+    }
+    check.canOpen = true;
+    return check;
+}
+
 WorkingFileEditorDialog::WorkingFileEditorDialog(GitService *git, const QString &repoPath,
                                                    const QString &relativePath,
                                                    const WorkingTreeChange &change,
@@ -199,6 +218,16 @@ void WorkingFileEditorDialog::open(QWidget *parent, GitService *git, const QStri
                                    const QString &relativePath, const WorkingTreeChange &change,
                                    WorkingDiffScope scope, SavedCallback onSaved)
 {
+    const OpenCheck check = checkEditable(git, repoPath, relativePath, change, scope);
+    if (check.binary) {
+        QMessageBox::information(parent, tr("Edit file"), check.error);
+        return;
+    }
+    if (!check.canOpen) {
+        QMessageBox::warning(parent, tr("Edit file"), check.error);
+        return;
+    }
+
     auto *dialog = new WorkingFileEditorDialog(git, repoPath, relativePath, change, scope,
                                                std::move(onSaved), nullptr);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -215,27 +244,28 @@ QString WorkingFileEditorDialog::absolutePath() const
 
 bool WorkingFileEditorDialog::loadContent()
 {
+    const OpenCheck check = inspectContent();
+    if (check.binary) {
+        return false;
+    }
+    if (!check.canOpen) {
+        m_statusLabel->setText(check.error);
+        return false;
+    }
+
     const EditorLoadResult loaded =
         loadEditableContent(m_git, m_repoPath, m_relativePath, m_change, m_scope);
-
-    if (loaded.binary) {
-        m_statusLabel->setText(tr("Binary file — editing is not supported."));
-        QMessageBox::information(this, tr("Edit file"),
-                                 tr("Binary files cannot be edited in git_view."));
-        return false;
-    }
-
-    if (!loaded.ok) {
-        m_statusLabel->setText(loaded.error);
-        QMessageBox::warning(this, tr("Edit file"), loaded.error);
-        return false;
-    }
 
     m_loadedContent = loaded.content;
     m_editor->setPlainText(m_loadedContent);
     m_dirty = false;
     updateSaveState();
     return true;
+}
+
+WorkingFileEditorDialog::OpenCheck WorkingFileEditorDialog::inspectContent() const
+{
+    return checkEditable(m_git, m_repoPath, m_relativePath, m_change, m_scope);
 }
 
 bool WorkingFileEditorDialog::saveToDisk()

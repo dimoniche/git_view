@@ -537,7 +537,12 @@ void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
             });
         }
 
-        menu.addAction(tr("Edit file…"), this, [this]() { openFileEditor(); });
+        const WorkingDiffScope scope =
+            static_cast<WorkingDiffScope>(item->data(0, ScopeRole).toInt());
+        menu.addAction(tr("Edit file…"), this, [this]() { openFileEditor(); })
+            ->setEnabled(
+                WorkingFileEditorDialog::checkEditable(m_git, m_repoPath, path, change, scope)
+                    .canOpen);
 
         menu.addAction(tr("Open diff in window"), this, [this]() { openDiffInSeparateWindow(); });
 
