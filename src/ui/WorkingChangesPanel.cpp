@@ -5,6 +5,7 @@
 #include "git/GitService.h"
 #include "ui/DiffDisplay.h"
 #include "ui/DiffViewerDialog.h"
+#include "ui/WorkingFileEditorDialog.h"
 
 #include <QAbstractItemView>
 #include <QFileInfo>
@@ -536,6 +537,10 @@ void WorkingChangesPanel::showFilesContextMenu(const QPoint &pos)
             });
         }
 
+        menu.addAction(tr("Edit file…"), this, [this]() { openFileEditor(); });
+
+        menu.addAction(tr("Open diff in window"), this, [this]() { openDiffInSeparateWindow(); });
+
         menu.addAction(tr("Add to .gitignore"), this, [this, path]() {
             emit addToGitignoreRequested(path);
         });
@@ -865,6 +870,24 @@ void WorkingChangesPanel::showFileDiffInWindow(const QString &repoRelativePath,
                                                WorkingDiffScope scope)
 {
     showFileDiffInWindowImpl(repoRelativePath, scope);
+}
+
+void WorkingChangesPanel::openFileEditor()
+{
+    const QTreeWidgetItem *item = selectedFileItem();
+    if (!item || !m_git || m_repoPath.isEmpty()) {
+        return;
+    }
+
+    const QString path = item->data(0, PathRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const WorkingTreeChange change = changeForPath(path);
+    const WorkingDiffScope scope = selectedItemScope();
+    WorkingFileEditorDialog::open(window(), m_git, m_repoPath, path, change, scope,
+                                  [this]() { emit workingTreeChanged(); });
 }
 
 void WorkingChangesPanel::openDiffInSeparateWindow()

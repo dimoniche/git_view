@@ -302,6 +302,8 @@ void MainWindow::setupUi()
             &MainWindow::addPathToGitignore);
     connect(m_workingPanel, &WorkingChangesPanel::fileSelectionChanged, this,
             &MainWindow::updateWorkingTreeActions);
+    connect(m_workingPanel, &WorkingChangesPanel::workingTreeChanged, this,
+            &MainWindow::refreshWorkingTree);
     m_detailsTabs = new QTabWidget(m_detailsPanelContainer);
     m_detailsTabs->addTab(m_detailsPanel, tr("Commit"));
     m_detailsTabs->addTab(m_workingPanel, tr("Working tree"));
