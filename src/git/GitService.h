@@ -2,6 +2,7 @@
 
 #include "core/Branch.h"
 #include "core/Commit.h"
+#include "core/Tag.h"
 #include "core/GitRemote.h"
 #include "core/CommitDetails.h"
 #include "core/WorkingTreeChange.h"
@@ -40,6 +41,12 @@ struct WorkingFileContent {
     QString error;
 };
 
+enum class UndoCommitMode {
+    KeepStaged,
+    KeepUnstaged,
+    Discard,
+};
+
 class GitService {
 public:
     explicit GitService(GitProcessRunner runner = {});
@@ -55,6 +62,7 @@ public:
                                   int maxCount = 500) const;
     int commitCount(const QString &repoPath, const QString &branch = {}) const;
     std::vector<Branch> branches(const QString &repoPath) const;
+    std::vector<Tag> tags(const QString &repoPath) const;
     QString currentBranch(const QString &repoPath) const;
     QString displayBranchName(const QString &repoPath) const;
     static bool isPseudoDetachedBranchName(const QString &name);
@@ -86,6 +94,8 @@ public:
                                  const QString &message,
                                  bool noEdit = false) const;
     bool hasCommits(const QString &repoPath) const;
+    bool hasParentCommit(const QString &repoPath) const;
+    GitProcessResult undoLastCommit(const QString &repoPath, UndoCommitMode mode) const;
     QString headCommitMessage(const QString &repoPath) const;
     GitProcessResult discardAllChanges(const QString &repoPath) const;
     GitProcessResult discardFileChanges(const QString &repoPath,

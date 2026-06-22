@@ -33,6 +33,9 @@ protected:
     void showEvent(QShowEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -57,6 +60,21 @@ private:
     bool cellAtDisplayLine(int displayLine, int col, VTermScreenCell *cell) const;
     void clampScrollOffset();
     void paintCursor(QPainter &painter) const;
+    struct CellPos {
+        int displayLine = -1;
+        int col = -1;
+    };
+    CellPos cellPosFromMouse(const QPoint &pos) const;
+    void normalizeSelection(CellPos *start, CellPos *end) const;
+    bool isCellSelected(int displayLine, int col) const;
+    QString cellText(const VTermScreenCell &cell) const;
+    QString selectedText() const;
+    void clearSelection();
+    void copySelectionToClipboard() const;
+    void selectWordAt(const CellPos &pos);
+    void finalizeSelection();
+    bool handleCopyKeyEvent(const QKeyEvent *event) const;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
     PtySession *m_pty = nullptr;
     VTerm *m_vterm = nullptr;
@@ -75,5 +93,9 @@ private:
     QTimer *m_cursorBlinkTimer = nullptr;
     QVector<QVector<VTermScreenCell>> m_scrollback;
     int m_scrollOffset = 0;
+    bool m_selecting = false;
+    bool m_hasSelection = false;
+    CellPos m_selAnchor;
+    CellPos m_selCursor;
     static constexpr int kMaxScrollbackLines = 10000;
 };

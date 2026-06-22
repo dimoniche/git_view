@@ -19,6 +19,7 @@ set(GIT_VIEW_SOURCES
     ui/CommitDetailsPanel.cpp
     ui/CommitDetailsDialog.cpp
     ui/WorkingChangesPanel.cpp
+    ui/WorkingFileEditorDialog.cpp
     ui/RemotesDialog.cpp
     ui/RepoTerminalPanel.cpp
     ui/PtySession.cpp

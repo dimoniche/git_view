@@ -132,6 +132,11 @@ void MainWindow::setupUi()
     m_amendAction->setEnabled(false);
     connect(m_amendAction, &QAction::triggered, this, &MainWindow::amendLastCommit);
 
+    m_undoCommitAction = new QAction(tr("Undo last commit…"), this);
+    m_undoCommitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_U));
+    m_undoCommitAction->setEnabled(false);
+    connect(m_undoCommitAction, &QAction::triggered, this, &MainWindow::undoLastCommit);
+
     m_checkoutAction = new QAction(tr("Checkout branch…"), this);
     m_checkoutAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
     m_checkoutAction->setEnabled(false);
@@ -170,6 +175,7 @@ void MainWindow::setupUi()
     repoMenu->addAction(m_pullAction);
     repoMenu->addAction(m_commitAction);
     repoMenu->addAction(m_amendAction);
+    repoMenu->addAction(m_undoCommitAction);
     repoMenu->addSeparator();
     repoMenu->addAction(m_discardFileAction);
     repoMenu->addAction(m_discardAllAction);
@@ -302,6 +308,8 @@ void MainWindow::setupUi()
             &MainWindow::addPathToGitignore);
     connect(m_workingPanel, &WorkingChangesPanel::fileSelectionChanged, this,
             &MainWindow::updateWorkingTreeActions);
+    connect(m_workingPanel, &WorkingChangesPanel::workingTreeChanged, this,
+            &MainWindow::refreshWorkingTree);
     m_detailsTabs = new QTabWidget(m_detailsPanelContainer);
     m_detailsTabs->addTab(m_detailsPanel, tr("Commit"));
     m_detailsTabs->addTab(m_workingPanel, tr("Working tree"));
@@ -1140,6 +1148,119 @@ void MainWindow::amendLastCommit()
     refreshRepository();
 }
 
+void MainWindow::undoLastCommit()
+{
+    if (!m_repo.isValid()) {
+        QMessageBox::information(this, tr("Undo commit"), tr("Open a repository first."));
+        return;
+    }
+
+    if (!m_git.hasParentCommit(m_repo.path())) {
+        QMessageBox::information(this, tr("Undo commit"),
+                                 tr("There is no previous commit to reset to."));
+        return;
+    }
+
+    const QStringList conflicts = m_git.unmergedFiles(m_repo.path());
+    if (!conflicts.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Undo commit"),
+            tr("Cannot undo the last commit while merge conflicts are unresolved.\n\n%1")
+                .arg(conflicts.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    const Branch currentBranch = currentLocalBranch();
+    const BranchSyncCounts syncCounts = m_git.currentBranchSyncCounts(m_repo.path());
+    const bool likelyPushed =
+        currentBranch.hasUpstream() && syncCounts.valid && syncCounts.ahead == 0;
+
+    const QString fullMessage = m_git.headCommitMessage(m_repo.path());
+    const QString subject = fullMessage.section(QLatin1Char('\n'), 0, 0).trimmed();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Undo last commit"));
+    dialog.resize(520, 360);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *infoLabel = new QLabel(
+        tr("Remove the latest commit from the current branch. Choose what to do with its "
+           "changes."),
+        &dialog);
+    infoLabel->setWordWrap(true);
+    layout->addWidget(infoLabel);
+
+    if (!subject.isEmpty()) {
+        auto *commitLabel =
+            new QLabel(tr("Last commit: %1").arg(subject), &dialog);
+        commitLabel->setWordWrap(true);
+        commitLabel->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        layout->addWidget(commitLabel);
+    }
+
+    if (likelyPushed) {
+        auto *warningLabel = new QLabel(
+            tr("The current branch appears to be in sync with its upstream. Undoing rewrites "
+               "history and may require a force push if you commit again."),
+            &dialog);
+        warningLabel->setWordWrap(true);
+        warningLabel->setStyleSheet(QStringLiteral("color: palette(link);"));
+        layout->addWidget(warningLabel);
+    }
+
+    auto *keepUnstagedRadio =
+        new QRadioButton(tr("Keep changes unstaged (git reset --mixed HEAD~1)"), &dialog);
+    auto *keepStagedRadio =
+        new QRadioButton(tr("Keep changes staged (git reset --soft HEAD~1)"), &dialog);
+    auto *discardRadio =
+        new QRadioButton(tr("Discard changes (git reset --hard HEAD~1)"), &dialog);
+    keepUnstagedRadio->setChecked(true);
+    layout->addWidget(keepUnstagedRadio);
+    layout->addWidget(keepStagedRadio);
+    layout->addWidget(discardRadio);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    UndoCommitMode mode = UndoCommitMode::KeepUnstaged;
+    if (keepStagedRadio->isChecked()) {
+        mode = UndoCommitMode::KeepStaged;
+    } else if (discardRadio->isChecked()) {
+        mode = UndoCommitMode::Discard;
+        const auto answer = QMessageBox::warning(
+            this, tr("Undo commit"),
+            tr("Discard all changes from the last commit? This cannot be undone."),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    const GitProcessResult resetResult = m_git.undoLastCommit(m_repo.path(), mode);
+    if (!resetResult.success()) {
+        QStringList parts;
+        for (const QString &part :
+             {m_git.lastError(), resetResult.stderrText.trimmed(), resetResult.stdoutText.trimmed()}) {
+            if (!part.isEmpty()) {
+                parts << part;
+            }
+        }
+        QMessageBox::critical(this, tr("Undo commit failed"), parts.join(QStringLiteral("\n\n")));
+        return;
+    }
+
+    QMessageBox::information(this, tr("Undo commit"), tr("Last commit was undone."));
+    refreshRepository();
+}
+
 void MainWindow::discardAllChanges()
 {
     if (!m_repo.isValid()) {
@@ -1476,6 +1597,9 @@ void MainWindow::updateWorkingTreeActions()
     if (m_amendAction) {
         m_amendAction->setEnabled(canAmend);
     }
+    if (m_undoCommitAction) {
+        m_undoCommitAction->setEnabled(repoOpen && m_git.hasParentCommit(m_repo.path()));
+    }
     if (m_discardAllAction) {
         m_discardAllAction->setEnabled(repoOpen && dirty);
     }
@@ -1488,8 +1612,13 @@ void MainWindow::updateWorkingTreeActions()
 
 void MainWindow::updateRepoLabel()
 {
+    if (!m_repoLabel) {
+        return;
+    }
+
     if (!m_repo.isValid()) {
         m_repoLabel->setText(tr("No repository"));
+        updateWindowTitle();
         return;
     }
 
@@ -1502,6 +1631,20 @@ void MainWindow::updateRepoLabel()
                 + QStringLiteral("</a>");
     }
     m_repoLabel->setText(html);
+    updateWindowTitle();
+}
+
+void MainWindow::updateWindowTitle()
+{
+    const QString appName = tr("git_view");
+    if (!m_repo.isValid()) {
+        setWindowTitle(appName);
+        return;
+    }
+
+    const QString repoName = QFileInfo(m_repo.path()).fileName();
+    const QString branch = m_git.displayBranchName(m_repo.path());
+    setWindowTitle(tr("%1 — %2 — %3").arg(appName, repoName, branch));
 }
 
 void MainWindow::refreshWorkingTree()
@@ -1537,6 +1680,7 @@ void MainWindow::reloadBranches()
 
     m_branchList->clear();
     m_branches = m_git.branches(m_repo.path());
+    m_tags = m_git.tags(m_repo.path());
     if (m_branches.empty() && !m_git.lastError().isEmpty()) {
         m_branchList->blockSignals(false);
         if (selection) {
@@ -1570,6 +1714,7 @@ void MainWindow::reloadBranches()
     m_syncingBranchList = false;
 
     updateBranchActions();
+    updateWindowTitle();
 }
 
 void MainWindow::restoreBranchListSelection()
@@ -2130,7 +2275,7 @@ void MainWindow::reloadLog(const QString &branchFilter)
     }
 
     const QString branchTip = filter.isEmpty() || commits.empty() ? QString() : commits.front().hash;
-    m_historyView->setCommits(commits, branchTip, m_branches);
+    m_historyView->setCommits(commits, branchTip, m_branches, m_tags);
     const int shown = static_cast<int>(commits.size());
     const int total = m_git.commitCount(m_repo.path(), filter);
     const bool hasMore = shown >= m_logLimit && (total == 0 || shown < total);

@@ -3,6 +3,10 @@
 #include "ui/PtySession.h"
 
 #include <QFocusEvent>
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QMetaObject>
 #include <QPointer>
 #include <QEvent>
@@ -10,6 +14,7 @@
 #include <QTimer>
 #include <QFontMetrics>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -161,6 +166,7 @@ VtermTerminalWidget::VtermTerminalWidget(QWidget *parent)
     : QWidget(parent)
 {
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, QColor(0x1e, 0x1e, 0x1e));
@@ -194,6 +200,9 @@ VtermTerminalWidget::VtermTerminalWidget(QWidget *parent)
 
 VtermTerminalWidget::~VtermTerminalWidget()
 {
+    if (mouseGrabber() == this) {
+        releaseMouse();
+    }
     stopShell();
 }
 
@@ -219,6 +228,7 @@ bool VtermTerminalWidget::startShell(const QString &workingDirectory)
     screenCallbacks.sb_clear = onSbClear;
     vterm_screen_set_callbacks(m_vtermScreen, &screenCallbacks, this);
     clearScrollback();
+    clearSelection();
     vterm_screen_reset(m_vtermScreen, 1);
 
     if (!m_pty->start(workingDirectory)) {
@@ -264,6 +274,7 @@ void VtermTerminalWidget::stopShell()
     }
 
     clearScrollback();
+    clearSelection();
     update();
 }
 
@@ -371,21 +382,28 @@ void VtermTerminalWidget::paintEvent(QPaintEvent *event)
 
             const QColor fg = colorFromVterm(&cell.fg, true, defaultFg);
             const QColor bg = colorFromVterm(&cell.bg, false, defaultBg);
+            const bool selected = isCellSelected(displayLine, col);
 
             const QRect cellRect(col * m_cellWidth + 2, row * m_cellHeight + 2, m_cellWidth,
                                  m_cellHeight);
-            painter.fillRect(cellRect, bg);
+            if (selected) {
+                painter.fillRect(cellRect, QColor(0x26, 0x4f, 0x78));
+            } else {
+                painter.fillRect(cellRect, bg);
+            }
 
             QString text;
             for (int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell.chars[i] != 0; ++i) {
                 text.append(QChar::fromUcs4(cell.chars[i]));
             }
-            if (text.isEmpty()) {
+            if (text.isEmpty() && !selected) {
                 continue;
             }
 
-            painter.setPen(fg);
-            painter.drawText(cellRect, Qt::AlignLeft | Qt::AlignVCenter, text);
+            painter.setPen(selected ? QColor(0xff, 0xff, 0xff) : fg);
+            if (!text.isEmpty()) {
+                painter.drawText(cellRect, Qt::AlignLeft | Qt::AlignVCenter, text);
+            }
         }
     }
 
@@ -435,6 +453,9 @@ int VtermTerminalWidget::onSetTermProp(VTermProp prop, VTermValue *val, void *us
 void VtermTerminalWidget::paintCursor(QPainter &painter) const
 {
     if (!m_vtermScreen || !m_hasFocus || m_scrollOffset > 0 || !m_cursorVisible) {
+        return;
+    }
+    if (m_hasSelection || m_selecting) {
         return;
     }
     if (m_cursorBlink && !m_cursorBlinkPhase) {
@@ -577,9 +598,18 @@ bool VtermTerminalWidget::sendControlCharacter(QKeyEvent *event)
 
 bool VtermTerminalWidget::event(QEvent *event)
 {
+    if (event->type() == QEvent::KeyPress) {
+        const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+        if (handleCopyKeyEvent(keyEvent)) {
+            return true;
+        }
+    }
+
     if (event->type() == QEvent::ShortcutOverride) {
         const auto *keyEvent = static_cast<const QKeyEvent *>(event);
         if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab) {
+            event->accept();
+        } else if (handleCopyKeyEvent(keyEvent)) {
             event->accept();
         }
     }
@@ -600,6 +630,18 @@ void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
         return;
     }
 
+    const Qt::KeyboardModifiers mods = event->modifiers() & ~Qt::KeypadModifier;
+
+    if (handleCopyKeyEvent(event)) {
+        event->accept();
+        return;
+    }
+
+    if (m_hasSelection || m_selecting) {
+        clearSelection();
+        update();
+    }
+
     if (m_scrollOffset > 0) {
         m_scrollOffset = 0;
         update();
@@ -610,7 +652,6 @@ void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
         return;
     }
 
-    const Qt::KeyboardModifiers mods = event->modifiers() & ~Qt::KeypadModifier;
     if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) {
         if (event->key() == Qt::Key_Backtab || (mods & Qt::ShiftModifier)) {
             sendInputToPty("\033[Z");
@@ -649,7 +690,298 @@ void VtermTerminalWidget::keyPressEvent(QKeyEvent *event)
 void VtermTerminalWidget::mousePressEvent(QMouseEvent *event)
 {
     setFocus();
+
+    if (event->button() == Qt::LeftButton && m_vtermScreen) {
+        if (mouseGrabber() == this) {
+            releaseMouse();
+        }
+        m_selecting = true;
+        m_hasSelection = false;
+        m_selAnchor = cellPosFromMouse(event->pos());
+        m_selCursor = m_selAnchor;
+        grabMouse();
+        update();
+        event->accept();
+        return;
+    }
+
     QWidget::mousePressEvent(event);
+}
+
+void VtermTerminalWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_selecting && (event->buttons() & Qt::LeftButton)) {
+        m_selCursor = cellPosFromMouse(event->pos());
+        finalizeSelection();
+        update();
+        event->accept();
+        return;
+    }
+
+    QWidget::mouseMoveEvent(event);
+}
+
+void VtermTerminalWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && (m_selecting || m_hasSelection)) {
+        m_selecting = false;
+        if (mouseGrabber() == this) {
+            releaseMouse();
+        }
+        m_selCursor = cellPosFromMouse(event->pos());
+        finalizeSelection();
+        if (m_hasSelection) {
+            copySelectionToClipboard();
+        }
+        update();
+        event->accept();
+        return;
+    }
+
+    QWidget::mouseReleaseEvent(event);
+}
+
+void VtermTerminalWidget::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_vtermScreen) {
+        if (mouseGrabber() == this) {
+            releaseMouse();
+        }
+        m_selecting = false;
+        selectWordAt(cellPosFromMouse(event->pos()));
+        if (m_hasSelection) {
+            copySelectionToClipboard();
+        }
+        update();
+        event->accept();
+        return;
+    }
+
+    QWidget::mouseDoubleClickEvent(event);
+}
+
+VtermTerminalWidget::CellPos VtermTerminalWidget::cellPosFromMouse(const QPoint &pos) const
+{
+    CellPos cellPos;
+    if (m_cols < 1 || m_rows < 1) {
+        return cellPos;
+    }
+
+    cellPos.col = qBound(0, (pos.x() - 2) / m_cellWidth, m_cols - 1);
+    const int viewRow = qBound(0, (pos.y() - 2) / m_cellHeight, m_rows - 1);
+    cellPos.displayLine = static_cast<int>(m_scrollback.size()) - m_scrollOffset + viewRow;
+    return cellPos;
+}
+
+void VtermTerminalWidget::normalizeSelection(CellPos *start, CellPos *end) const
+{
+    if (!start || !end) {
+        return;
+    }
+
+    if (start->displayLine > end->displayLine
+        || (start->displayLine == end->displayLine && start->col > end->col)) {
+        qSwap(*start, *end);
+    }
+}
+
+bool VtermTerminalWidget::isCellSelected(int displayLine, int col) const
+{
+    if (!m_selecting && !m_hasSelection) {
+        return false;
+    }
+
+    CellPos start = m_selAnchor;
+    CellPos end = m_selCursor;
+    normalizeSelection(&start, &end);
+
+    if (displayLine < start.displayLine || displayLine > end.displayLine) {
+        return false;
+    }
+    if (displayLine == start.displayLine && col < start.col) {
+        return false;
+    }
+    if (displayLine == end.displayLine && col > end.col) {
+        return false;
+    }
+    return true;
+}
+
+QString VtermTerminalWidget::cellText(const VTermScreenCell &cell) const
+{
+    QString text;
+    for (int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell.chars[i] != 0; ++i) {
+        text.append(QChar::fromUcs4(cell.chars[i]));
+    }
+    return text;
+}
+
+QString VtermTerminalWidget::selectedText() const
+{
+    if (!m_hasSelection && !m_selecting) {
+        return {};
+    }
+
+    CellPos start = m_selAnchor;
+    CellPos end = m_selCursor;
+    normalizeSelection(&start, &end);
+
+    QStringList lines;
+    for (int displayLine = start.displayLine; displayLine <= end.displayLine; ++displayLine) {
+        const int colStart = displayLine == start.displayLine ? start.col : 0;
+        const int colEnd = displayLine == end.displayLine ? end.col : m_cols - 1;
+
+        QString lineText;
+        for (int col = colStart; col <= colEnd; ++col) {
+            VTermScreenCell cell{};
+            if (!cellAtDisplayLine(displayLine, col, &cell)) {
+                continue;
+            }
+            lineText.append(cellText(cell));
+        }
+        lines.append(lineText.trimmed());
+    }
+
+    return lines.join(QLatin1Char('\n'));
+}
+
+void VtermTerminalWidget::clearSelection()
+{
+    m_selecting = false;
+    m_hasSelection = false;
+    m_selAnchor = {};
+    m_selCursor = {};
+}
+
+void VtermTerminalWidget::copySelectionToClipboard() const
+{
+    const QString text = selectedText();
+    if (text.isEmpty()) {
+        return;
+    }
+
+    if (QClipboard *clipboard = QGuiApplication::clipboard()) {
+        clipboard->setText(text, QClipboard::Clipboard);
+#if defined(Q_OS_LINUX)
+        clipboard->setText(text, QClipboard::Selection);
+#endif
+    }
+}
+
+void VtermTerminalWidget::finalizeSelection()
+{
+    CellPos start = m_selAnchor;
+    CellPos end = m_selCursor;
+    normalizeSelection(&start, &end);
+
+    m_hasSelection = start.displayLine != end.displayLine || start.col != end.col;
+    if (!m_hasSelection) {
+        VTermScreenCell cell{};
+        if (cellAtDisplayLine(start.displayLine, start.col, &cell) && !cellText(cell).isEmpty()) {
+            m_hasSelection = true;
+        }
+    }
+}
+
+bool VtermTerminalWidget::handleCopyKeyEvent(const QKeyEvent *event) const
+{
+    if (!m_hasSelection || !event) {
+        return false;
+    }
+
+    const Qt::KeyboardModifiers mods = event->modifiers() & ~Qt::KeypadModifier;
+    if (event->key() != Qt::Key_C && event->key() != Qt::Key_Insert) {
+        return false;
+    }
+
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    if ((mods & Qt::MetaModifier) && event->key() == Qt::Key_C) {
+        copySelectionToClipboard();
+        return true;
+    }
+#endif
+
+    if ((mods & Qt::ControlModifier) && (mods & Qt::ShiftModifier)) {
+        if (event->key() == Qt::Key_C || event->key() == Qt::Key_Insert) {
+            copySelectionToClipboard();
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void VtermTerminalWidget::contextMenuEvent(QContextMenuEvent *event)
+{
+    if (!m_vtermScreen) {
+        QWidget::contextMenuEvent(event);
+        return;
+    }
+
+    QMenu menu(this);
+    QAction *copyAction = menu.addAction(tr("Copy"));
+    copyAction->setEnabled(m_hasSelection);
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    copyAction->setShortcut(QKeySequence(Qt::META | Qt::Key_C));
+#else
+    copyAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
+#endif
+
+    QAction *chosen = menu.exec(event->globalPos());
+    if (chosen == copyAction && m_hasSelection) {
+        copySelectionToClipboard();
+    }
+}
+
+void VtermTerminalWidget::selectWordAt(const CellPos &pos)
+{
+    if (pos.displayLine < 0 || pos.col < 0) {
+        return;
+    }
+
+    auto isWordChar = [](QChar ch) {
+        return ch.isLetterOrNumber() || ch == QLatin1Char('_') || ch == QLatin1Char('-')
+               || ch == QLatin1Char('.') || ch == QLatin1Char('/');
+    };
+
+    int left = pos.col;
+    int right = pos.col;
+
+    while (left > 0) {
+        VTermScreenCell cell{};
+        if (!cellAtDisplayLine(pos.displayLine, left - 1, &cell)) {
+            break;
+        }
+        const QString text = cellText(cell);
+        if (text.isEmpty() || !isWordChar(text.at(0))) {
+            break;
+        }
+        --left;
+    }
+
+    while (right < m_cols - 1) {
+        VTermScreenCell cell{};
+        if (!cellAtDisplayLine(pos.displayLine, right + 1, &cell)) {
+            break;
+        }
+        const QString text = cellText(cell);
+        if (text.isEmpty() || !isWordChar(text.at(0))) {
+            break;
+        }
+        ++right;
+    }
+
+    m_selecting = false;
+    m_selAnchor = {pos.displayLine, left};
+    m_selCursor = {pos.displayLine, right};
+    m_hasSelection = false;
+    for (int col = left; col <= right; ++col) {
+        VTermScreenCell cell{};
+        if (cellAtDisplayLine(pos.displayLine, col, &cell) && !cellText(cell).isEmpty()) {
+            m_hasSelection = true;
+            break;
+        }
+    }
 }
 
 void VtermTerminalWidget::focusInEvent(QFocusEvent *event)

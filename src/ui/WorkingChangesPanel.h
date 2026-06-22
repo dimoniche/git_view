@@ -40,6 +40,7 @@ signals:
     void stageAllRequested();
     void addToGitignoreRequested(const QString &path);
     void fileSelectionChanged();
+    void workingTreeChanged();
 
 private slots:
     void onFileSelectionChanged();
@@ -59,6 +60,7 @@ private slots:
 private:
     void loadDiffForCurrentFile();
     void openDiffInSeparateWindow();
+    void openFileEditor();
     void showFileDiffInWindowImpl(const QString &repoRelativePath, WorkingDiffScope scope);
     DiffViewerSources buildSourcesForFile(const QString &path, WorkingDiffScope scope,
                                           const WorkingTreeChange &change) const;

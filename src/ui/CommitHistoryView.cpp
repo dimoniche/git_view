@@ -6,6 +6,7 @@
 #include <QEvent>
 #include <QGuiApplication>
 #include <QClipboard>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QMenu>
@@ -126,11 +127,20 @@ bool CommitHistoryView::eventFilter(QObject *watched, QEvent *event)
 
 void CommitHistoryView::setCommits(const std::vector<Commit> &commits,
                                    const QString &branchTipHash,
-                                   const std::vector<Branch> &branches)
+                                   const std::vector<Branch> &branches,
+                                   const std::vector<Tag> &tags)
 {
     m_commits = commits;
-    m_layout = GraphLayout::build(m_commits, branchTipHash, branches);
+    m_layout = GraphLayout::build(m_commits, branchTipHash, branches, tags);
     m_graph->setData(m_commits, m_layout);
+
+    QHash<QString, QStringList> tagsByHash;
+    for (const Tag &tag : tags) {
+        tagsByHash[tag.tipHash].append(tag.name);
+    }
+    for (auto it = tagsByHash.begin(); it != tagsByHash.end(); ++it) {
+        it.value().sort(Qt::CaseInsensitive);
+    }
 
     m_model->removeRows(0, m_model->rowCount());
     for (const Commit &commit : m_commits) {
@@ -138,7 +148,13 @@ void CommitHistoryView::setCommits(const std::vector<Commit> &commits,
         auto *hashItem = new QStandardItem(commit.hash.left(8));
         auto *authorItem = new QStandardItem(commit.author);
         auto *dateItem = new QStandardItem(commit.date);
-        auto *subjectItem = new QStandardItem(commit.subject);
+
+        QString subject = commit.subject;
+        const QStringList commitTags = tagsByHash.value(commit.hash);
+        if (!commitTags.isEmpty()) {
+            subject += QStringLiteral("  [%1]").arg(commitTags.join(QStringLiteral(", ")));
+        }
+        auto *subjectItem = new QStandardItem(subject);
         for (QStandardItem *item : {hashItem, authorItem, dateItem, subjectItem}) {
             item->setEditable(false);
         }
