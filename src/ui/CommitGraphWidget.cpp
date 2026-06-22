@@ -1,6 +1,9 @@
 #include "ui/CommitGraphWidget.h"
 
+#include "ui/EditorTheme.h"
+
 #include <QColor>
+#include <QFont>
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -10,6 +13,46 @@
 #include <functional>
 
 namespace {
+
+struct TagLabelStyle {
+    QColor text;
+    QColor background;
+};
+
+TagLabelStyle tagLabelStyle(const QWidget *widget, bool selected)
+{
+    const bool dark = editorUsesDarkTheme(widget);
+    if (selected) {
+        return {QColor(0xff, 0xff, 0xff), QColor(0, 0, 0, 0)};
+    }
+    if (dark) {
+        return {QColor(0xff, 0xd5, 0x4f), QColor(0x92, 0x40, 0x0e, 180)};
+    }
+    return {QColor(0x92, 0x40, 0x0e), QColor(0xff, 0xed, 0xd5)};
+}
+
+void drawTagLabel(QPainter &painter, const QWidget *widget, const QRect &rect, const QString &text,
+                  bool selected)
+{
+    const TagLabelStyle style = tagLabelStyle(widget, selected);
+
+    QFont font = painter.font();
+    font.setBold(true);
+    painter.setFont(font);
+
+    const QFontMetrics fm(font);
+    const int textWidth = fm.horizontalAdvance(text);
+    const int pillHeight = fm.height() + 4;
+    const QRect pillRect(rect.left(), rect.top() + (rect.height() - pillHeight) / 2,
+                         textWidth + 10, pillHeight);
+
+    if (style.background.alpha() > 0) {
+        painter.fillRect(pillRect, style.background);
+    }
+
+    painter.setPen(style.text);
+    painter.drawText(rect, Qt::AlignLeft | Qt::AlignVCenter, text);
+}
 
 QColor laneColor(int lane)
 {
@@ -214,15 +257,14 @@ void CommitGraphWidget::paintEvent(QPaintEvent *event)
 
             const int y = rowY(label.row);
             const bool selected = label.row == m_selectedRow;
+            const QRect textRect(labelX, y, labelWidth, m_rowHeight);
             if (label.kind == GraphRefKind::Tag) {
-                painter.setPen(selected ? QColor(0xff, 0xe0, 0x82)
-                                        : QColor(0xc8, 0x7f, 0x0a));
+                drawTagLabel(painter, this, textRect, label.name, selected);
             } else {
                 painter.setPen(selected ? palette().color(QPalette::HighlightedText)
                                         : palette().color(QPalette::Text));
+                painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, label.name);
             }
-            painter.drawText(labelX, y, labelWidth, m_rowHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                             label.name);
         }
     }
 }
