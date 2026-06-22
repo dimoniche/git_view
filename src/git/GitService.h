@@ -2,6 +2,7 @@
 
 #include "core/Branch.h"
 #include "core/Commit.h"
+#include "core/Tag.h"
 #include "core/GitRemote.h"
 #include "core/CommitDetails.h"
 #include "core/WorkingTreeChange.h"
@@ -55,6 +56,7 @@ public:
                                   int maxCount = 500) const;
     int commitCount(const QString &repoPath, const QString &branch = {}) const;
     std::vector<Branch> branches(const QString &repoPath) const;
+    std::vector<Tag> tags(const QString &repoPath) const;
     QString currentBranch(const QString &repoPath) const;
     QString displayBranchName(const QString &repoPath) const;
     static bool isPseudoDetachedBranchName(const QString &name);

@@ -1537,6 +1537,7 @@ void MainWindow::reloadBranches()
 
     m_branchList->clear();
     m_branches = m_git.branches(m_repo.path());
+    m_tags = m_git.tags(m_repo.path());
     if (m_branches.empty() && !m_git.lastError().isEmpty()) {
         m_branchList->blockSignals(false);
         if (selection) {
@@ -2130,7 +2131,7 @@ void MainWindow::reloadLog(const QString &branchFilter)
     }
 
     const QString branchTip = filter.isEmpty() || commits.empty() ? QString() : commits.front().hash;
-    m_historyView->setCommits(commits, branchTip, m_branches);
+    m_historyView->setCommits(commits, branchTip, m_branches, m_tags);
     const int shown = static_cast<int>(commits.size());
     const int total = m_git.commitCount(m_repo.path(), filter);
     const bool hasMore = shown >= m_logLimit && (total == 0 || shown < total);

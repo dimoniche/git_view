@@ -96,13 +96,16 @@ int CommitGraphWidget::graphLanesWidth() const
 
 int CommitGraphWidget::labelAreaWidth() const
 {
-    if (m_layout.laneLabels.empty()) {
+    if (m_layout.laneLabels.empty() && m_layout.rowLabels.empty()) {
         return 0;
     }
 
     const QFontMetrics fm(font());
     int maxWidth = 0;
     for (const GraphLaneLabel &label : m_layout.laneLabels) {
+        maxWidth = std::max(maxWidth, fm.horizontalAdvance(label.name));
+    }
+    for (const GraphRowLabel &label : m_layout.rowLabels) {
         maxWidth = std::max(maxWidth, fm.horizontalAdvance(label.name));
     }
     return maxWidth + kLabelPadding;
@@ -187,11 +190,10 @@ void CommitGraphWidget::paintEvent(QPaintEvent *event)
         painter.drawEllipse(QPoint(cx, cy), radius, radius);
     }
 
-    if (!m_layout.laneLabels.empty()) {
+    if (!m_layout.laneLabels.empty() || !m_layout.rowLabels.empty()) {
         const int labelX = graphLanesWidth() + kLabelPadding;
         const int labelWidth = width() - labelX;
 
-        painter.setPen(palette().color(QPalette::Text));
         for (const GraphLaneLabel &label : m_layout.laneLabels) {
             if (label.lane <= 0 || label.name.isEmpty()) {
                 continue;
@@ -199,12 +201,26 @@ void CommitGraphWidget::paintEvent(QPaintEvent *event)
 
             const int y = rowY(label.row);
             const bool selected = label.row == m_selectedRow;
-            if (selected) {
-                painter.setPen(palette().color(QPalette::HighlightedText));
-            } else {
-                painter.setPen(palette().color(QPalette::Text));
+            painter.setPen(selected ? palette().color(QPalette::HighlightedText)
+                                    : palette().color(QPalette::Text));
+            painter.drawText(labelX, y, labelWidth, m_rowHeight, Qt::AlignLeft | Qt::AlignVCenter,
+                             label.name);
+        }
+
+        for (const GraphRowLabel &label : m_layout.rowLabels) {
+            if (label.name.isEmpty()) {
+                continue;
             }
 
+            const int y = rowY(label.row);
+            const bool selected = label.row == m_selectedRow;
+            if (label.kind == GraphRefKind::Tag) {
+                painter.setPen(selected ? QColor(0xff, 0xe0, 0x82)
+                                        : QColor(0xc8, 0x7f, 0x0a));
+            } else {
+                painter.setPen(selected ? palette().color(QPalette::HighlightedText)
+                                        : palette().color(QPalette::Text));
+            }
             painter.drawText(labelX, y, labelWidth, m_rowHeight, Qt::AlignLeft | Qt::AlignVCenter,
                              label.name);
         }

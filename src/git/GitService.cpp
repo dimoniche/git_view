@@ -401,6 +401,62 @@ std::vector<Branch> GitService::branches(const QString &repoPath) const
     return list;
 }
 
+std::vector<Tag> GitService::tags(const QString &repoPath) const
+{
+    m_lastError.clear();
+    std::vector<Tag> list;
+
+    const GitProcessResult result = m_runner.run(
+        repoPath, {QStringLiteral("for-each-ref"), QStringLiteral("refs/tags"),
+                   QStringLiteral("--format=%(refname:short)|%(objecttype)|%(objectname)")});
+    if (!result.success()) {
+        setError(QStringLiteral("git tag failed"), result);
+        return list;
+    }
+
+    const QStringList lines = result.stdoutText.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (QString line : lines) {
+        line = line.trimmed();
+        const int firstSep = line.indexOf(QLatin1Char('|'));
+        if (firstSep < 0) {
+            continue;
+        }
+        const int secondSep = line.indexOf(QLatin1Char('|'), firstSep + 1);
+        if (secondSep < 0) {
+            continue;
+        }
+
+        Tag tag;
+        tag.name = line.left(firstSep).trimmed();
+        const QString objectType = line.mid(firstSep + 1, secondSep - firstSep - 1).trimmed();
+        const QString objectName = line.mid(secondSep + 1).trimmed();
+        if (tag.name.isEmpty() || objectName.isEmpty()) {
+            continue;
+        }
+
+        if (objectType == QLatin1String("tag")) {
+            const GitProcessResult commitResult = m_runner.run(
+                repoPath, {QStringLiteral("rev-parse"), QStringLiteral("refs/tags/") + tag.name
+                           + QStringLiteral("^{commit}")});
+            if (!commitResult.success()) {
+                continue;
+            }
+            tag.tipHash = commitResult.stdoutText.trimmed();
+        } else {
+            tag.tipHash = objectName;
+        }
+
+        if (!tag.tipHash.isEmpty()) {
+            list.push_back(std::move(tag));
+        }
+    }
+
+    std::sort(list.begin(), list.end(), [](const Tag &a, const Tag &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return list;
+}
+
 QString GitService::currentBranch(const QString &repoPath) const
 {
     const GitProcessResult result =

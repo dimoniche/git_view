@@ -3,6 +3,7 @@
 #include "AppLaunchOptions.h"
 #include "core/Branch.h"
 #include "core/Repo.h"
+#include "core/Tag.h"
 
 #include <QPoint>
 #include "git/GitService.h"
@@ -119,6 +120,7 @@ private:
     GitService m_git;
     Repo m_repo;
     std::vector<Branch> m_branches;
+    std::vector<Tag> m_tags;
     QString m_branchFilter;
     int m_logLimit = 500;
 
