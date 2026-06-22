@@ -1541,6 +1541,46 @@ bool GitService::hasCommits(const QString &repoPath) const
     return result.success();
 }
 
+bool GitService::hasParentCommit(const QString &repoPath) const
+{
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                                QStringLiteral("HEAD~1")});
+    return result.success();
+}
+
+GitProcessResult GitService::undoLastCommit(const QString &repoPath, UndoCommitMode mode) const
+{
+    m_lastError.clear();
+
+    if (!hasParentCommit(repoPath)) {
+        m_lastError = QStringLiteral("Cannot undo the initial commit");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    QStringList args{QStringLiteral("reset")};
+    switch (mode) {
+    case UndoCommitMode::KeepStaged:
+        args << QStringLiteral("--soft");
+        break;
+    case UndoCommitMode::KeepUnstaged:
+        args << QStringLiteral("--mixed");
+        break;
+    case UndoCommitMode::Discard:
+        args << QStringLiteral("--hard");
+        break;
+    }
+    args << QStringLiteral("HEAD~1");
+
+    const GitProcessResult result = m_runner.run(repoPath, args);
+    if (!result.success()) {
+        setError(QStringLiteral("git reset failed"), result);
+    }
+    return result;
+}
+
 QString GitService::headCommitMessage(const QString &repoPath) const
 {
     m_lastError.clear();

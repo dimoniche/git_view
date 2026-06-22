@@ -55,6 +55,7 @@ private slots:
     void focusHistoryPanel();
     void commitChanges();
     void amendLastCommit();
+    void undoLastCommit();
     void discardAllChanges();
     void discardFileChanges(const QStringList &paths);
     void stageFileChanges(const QStringList &paths);
@@ -153,6 +154,7 @@ private:
     QAction *m_toggleDetailsAction = nullptr;
     QAction *m_commitAction = nullptr;
     QAction *m_amendAction = nullptr;
+    QAction *m_undoCommitAction = nullptr;
     QAction *m_discardAllAction = nullptr;
     QAction *m_discardFileAction = nullptr;
     QAction *m_checkoutAction = nullptr;

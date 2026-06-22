@@ -41,6 +41,12 @@ struct WorkingFileContent {
     QString error;
 };
 
+enum class UndoCommitMode {
+    KeepStaged,
+    KeepUnstaged,
+    Discard,
+};
+
 class GitService {
 public:
     explicit GitService(GitProcessRunner runner = {});
@@ -88,6 +94,8 @@ public:
                                  const QString &message,
                                  bool noEdit = false) const;
     bool hasCommits(const QString &repoPath) const;
+    bool hasParentCommit(const QString &repoPath) const;
+    GitProcessResult undoLastCommit(const QString &repoPath, UndoCommitMode mode) const;
     QString headCommitMessage(const QString &repoPath) const;
     GitProcessResult discardAllChanges(const QString &repoPath) const;
     GitProcessResult discardFileChanges(const QString &repoPath,
