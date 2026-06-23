@@ -14,23 +14,26 @@ except ValueError:
 
 from gi.repository import GObject, Nautilus  # noqa: E402
 
-CONFIG_PATH = (
-    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    / "git_view"
-    / "integration.conf"
+RESOLVER_PATHS = (
+    Path("/usr/share/git_view/resolve-git_view-bin.sh"),
+    Path.home() / ".local/share/git_view/resolve-git_view-bin.sh",
 )
 
 
 def load_binary():
-    if CONFIG_PATH.is_file():
-        for line in CONFIG_PATH.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("GIT_VIEW_BIN="):
-                value = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if value and os.access(value, os.X_OK):
-                    return value
+    for resolver in RESOLVER_PATHS:
+        if resolver.is_file() and os.access(resolver, os.X_OK):
+            try:
+                output = subprocess.check_output(
+                    [str(resolver)],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+                if output and os.access(output, os.X_OK):
+                    return output
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pass
+
     from shutil import which
 
     return which("git_view")

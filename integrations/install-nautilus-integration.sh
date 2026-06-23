@@ -46,9 +46,11 @@ PYTHON_EXT_DIR="$HOME/.local/share/nautilus-python/extensions"
 
 mkdir -p "$CONFIG_DIR" "$LAUNCHER_DIR" "$SCRIPTS_DIR"
 cp "$ROOT/integrations/nautilus/run-git_view.sh" "$LAUNCHER_DIR/run-git_view.sh"
+cp "$ROOT/integrations/nautilus/resolve-git_view-bin.sh" "$LAUNCHER_DIR/resolve-git_view-bin.sh"
 cp "$ROOT/integrations/nautilus/uri_to_path.py" "$LAUNCHER_DIR/uri_to_path.py"
 cp "$ROOT/integrations/nautilus/nautilus-action.sh" "$LAUNCHER_DIR/nautilus-action.sh"
-chmod +x "$LAUNCHER_DIR/run-git_view.sh" "$LAUNCHER_DIR/uri_to_path.py" "$LAUNCHER_DIR/nautilus-action.sh"
+chmod +x "$LAUNCHER_DIR/run-git_view.sh" "$LAUNCHER_DIR/resolve-git_view-bin.sh" \
+    "$LAUNCHER_DIR/uri_to_path.py" "$LAUNCHER_DIR/nautilus-action.sh"
 
 for script in "$ROOT/integrations/nautilus/scripts/"*; do
     base="$(basename "$script")"

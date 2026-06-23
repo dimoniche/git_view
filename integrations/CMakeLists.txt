@@ -1,5 +1,11 @@
 include(GNUInstallDirs)
 
+configure_file(
+    nautilus/integration.conf.in
+    ${CMAKE_CURRENT_BINARY_DIR}/integration.conf
+    @ONLY
+)
+
 set(GIT_VIEW_NAUTILUS_SCRIPTS
     nautilus/scripts/open-in-git_view
     nautilus/scripts/show-working-changes
@@ -15,8 +21,14 @@ set(GIT_VIEW_NAUTILUS_SCRIPTS
 install(
     PROGRAMS
         nautilus/run-git_view.sh
+        nautilus/resolve-git_view-bin.sh
         nautilus/uri_to_path.py
         nautilus/nautilus-action.sh
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/git_view
+)
+
+install(
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/integration.conf
     DESTINATION ${CMAKE_INSTALL_DATADIR}/git_view
 )
 

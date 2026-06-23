@@ -1,0 +1,3 @@
+# Default binary path for the git-view Debian package.
+# User overrides for development builds: ~/.config/git_view/integration.conf
+GIT_VIEW_BIN=@CMAKE_INSTALL_FULL_BINDIR@/git_view

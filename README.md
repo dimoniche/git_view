@@ -120,6 +120,8 @@ Recommended packages for full Nautilus menu:
 sudo apt install nautilus python3-nautilus python3-gi zenity
 ```
 
+Nautilus launches the same `/usr/bin/git_view` as the dock. An old path in `~/.config/git_view/integration.conf` from a previous manual install is ignored when the packaged binary is available.
+
 ### Manual install (from source tree)
 
 TortoiseGit-style context menu for git repositories:
@@ -133,7 +135,7 @@ nautilus -q
 - **Scripts → GitView** — works without extra packages.
 - **Direct context menu items** — install `python3-nautilus`, then re-run the installer.
 
-Configuration (manual install only): `~/.config/git_view/integration.conf` (`GIT_VIEW_BIN`).
+Configuration (manual install only): `~/.config/git_view/integration.conf` (`GIT_VIEW_BIN`). When `git_view` is installed from the Debian package, `/usr/bin/git_view` takes priority over this file.
 
 ## Features (current)
 
