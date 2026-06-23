@@ -1,6 +1,9 @@
 #include "ui/CommitGraphWidget.h"
 
-#include <QColor>
+#include "ui/EditorTheme.h"
+
+#include <QHash>
+#include <QFont>
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -8,8 +11,114 @@
 #include <QPen>
 
 #include <functional>
+#include <utility>
 
 namespace {
+
+struct TagLabelStyle {
+    QColor text;
+    QColor background;
+};
+
+TagLabelStyle tagLabelStyle(const QWidget *widget, bool selected)
+{
+    const bool dark = editorUsesDarkTheme(widget);
+    if (selected) {
+        return {QColor(0xff, 0xff, 0xff), QColor(0, 0, 0, 0)};
+    }
+    if (dark) {
+        return {QColor(0xff, 0xd5, 0x4f), QColor(0x92, 0x40, 0x0e, 180)};
+    }
+    return {QColor(0x92, 0x40, 0x0e), QColor(0xff, 0xed, 0xd5)};
+}
+
+int labelTextWidth(const QFontMetrics &fm, const QString &text)
+{
+    if (text.isEmpty()) {
+        return 0;
+    }
+    return qMax(fm.horizontalAdvance(text), fm.boundingRect(text).width()) + 4;
+}
+
+void drawTagLabel(QPainter &painter, const QWidget *widget, const QRect &rect, const QString &text,
+                  bool selected)
+{
+    if (text.isEmpty()) {
+        return;
+    }
+
+    const TagLabelStyle style = tagLabelStyle(widget, selected);
+
+    QFont font = painter.font();
+    font.setBold(true);
+    painter.setFont(font);
+
+    const QFontMetrics fm(font);
+    const int textWidth = labelTextWidth(fm, text);
+    const int pillHeight = fm.height() + 4;
+    const QRect pillRect(rect.left(), rect.top() + (rect.height() - pillHeight) / 2,
+                         textWidth + 6, pillHeight);
+
+    if (style.background.alpha() > 0) {
+        painter.fillRect(pillRect, style.background);
+    }
+
+    painter.setPen(style.text);
+    painter.drawText(rect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip, text);
+}
+
+struct RowGraphLabels {
+    QString branchText;
+    QString tagText;
+};
+
+QHash<int, RowGraphLabels> collectRowLabels(const GraphLayout &layout)
+{
+    QHash<int, RowGraphLabels> byRow;
+    for (const GraphLaneLabel &label : layout.laneLabels) {
+        if (label.lane <= 0 || label.name.isEmpty()) {
+            continue;
+        }
+        RowGraphLabels &rowLabels = byRow[label.row];
+        if (rowLabels.branchText.isEmpty()) {
+            rowLabels.branchText = label.name;
+        } else if (!rowLabels.branchText.contains(label.name)) {
+            rowLabels.branchText += QStringLiteral(", ") + label.name;
+        }
+    }
+    for (const GraphRowLabel &label : layout.rowLabels) {
+        if (label.name.isEmpty()) {
+            continue;
+        }
+        RowGraphLabels &rowLabels = byRow[label.row];
+        if (label.kind == GraphRefKind::Tag) {
+            rowLabels.tagText = label.name;
+        } else if (rowLabels.branchText.isEmpty()) {
+            rowLabels.branchText = label.name;
+        }
+    }
+    return byRow;
+}
+
+int combinedLabelWidth(const QFont &font, const RowGraphLabels &labels)
+{
+    const QFontMetrics fm(font);
+    QFont tagFont = font;
+    tagFont.setBold(true);
+    const QFontMetrics tagFm(tagFont);
+
+    int width = 0;
+    if (!labels.branchText.isEmpty()) {
+        width += labelTextWidth(fm, labels.branchText);
+    }
+    if (!labels.branchText.isEmpty() && !labels.tagText.isEmpty()) {
+        width += labelTextWidth(fm, QStringLiteral("  "));
+    }
+    if (!labels.tagText.isEmpty()) {
+        width += labelTextWidth(tagFm, labels.tagText) + 6;
+    }
+    return width;
+}
 
 QColor laneColor(int lane)
 {
@@ -96,14 +205,14 @@ int CommitGraphWidget::graphLanesWidth() const
 
 int CommitGraphWidget::labelAreaWidth() const
 {
-    if (m_layout.laneLabels.empty()) {
+    const QHash<int, RowGraphLabels> byRow = collectRowLabels(m_layout);
+    if (byRow.isEmpty()) {
         return 0;
     }
 
-    const QFontMetrics fm(font());
     int maxWidth = 0;
-    for (const GraphLaneLabel &label : m_layout.laneLabels) {
-        maxWidth = std::max(maxWidth, fm.horizontalAdvance(label.name));
+    for (auto it = byRow.constBegin(); it != byRow.constEnd(); ++it) {
+        maxWidth = std::max(maxWidth, combinedLabelWidth(font(), it.value()));
     }
     return maxWidth + kLabelPadding;
 }
@@ -187,26 +296,35 @@ void CommitGraphWidget::paintEvent(QPaintEvent *event)
         painter.drawEllipse(QPoint(cx, cy), radius, radius);
     }
 
-    if (!m_layout.laneLabels.empty()) {
+    const QHash<int, RowGraphLabels> labelsByRow = collectRowLabels(m_layout);
+    if (!labelsByRow.isEmpty()) {
         const int labelX = graphLanesWidth() + kLabelPadding;
-        const int labelWidth = width() - labelX;
+        const QFontMetrics fm(font());
 
-        painter.setPen(palette().color(QPalette::Text));
-        for (const GraphLaneLabel &label : m_layout.laneLabels) {
-            if (label.lane <= 0 || label.name.isEmpty()) {
-                continue;
+        for (auto it = labelsByRow.constBegin(); it != labelsByRow.constEnd(); ++it) {
+            const int row = it.key();
+            const RowGraphLabels &labels = it.value();
+            const int y = rowY(row);
+            const bool selected = row == m_selectedRow;
+            int x = labelX;
+
+            if (!labels.branchText.isEmpty()) {
+                const QRect branchRect(x, y, std::max(0, width() - x), m_rowHeight);
+                painter.setPen(selected ? palette().color(QPalette::HighlightedText)
+                                        : palette().color(QPalette::Text));
+                painter.drawText(branchRect,
+                                 Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip,
+                                 labels.branchText);
+                x += labelTextWidth(fm, labels.branchText);
+                if (!labels.tagText.isEmpty()) {
+                    x += labelTextWidth(fm, QStringLiteral("  "));
+                }
             }
 
-            const int y = rowY(label.row);
-            const bool selected = label.row == m_selectedRow;
-            if (selected) {
-                painter.setPen(palette().color(QPalette::HighlightedText));
-            } else {
-                painter.setPen(palette().color(QPalette::Text));
+            if (!labels.tagText.isEmpty()) {
+                const QRect tagRect(x, y, std::max(0, width() - x), m_rowHeight);
+                drawTagLabel(painter, this, tagRect, labels.tagText, selected);
             }
-
-            painter.drawText(labelX, y, labelWidth, m_rowHeight, Qt::AlignLeft | Qt::AlignVCenter,
-                             label.name);
         }
     }
 }

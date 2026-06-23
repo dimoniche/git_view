@@ -3,6 +3,7 @@
 #include "core/Branch.h"
 #include "core/Commit.h"
 #include "core/GraphLayout.h"
+#include "core/Tag.h"
 
 #include <QWidget>
 #include <vector>
@@ -21,7 +22,8 @@ public:
 
     void setCommits(const std::vector<Commit> &commits,
                     const QString &branchTipHash = {},
-                    const std::vector<Branch> &branches = {});
+                    const std::vector<Branch> &branches = {},
+                    const std::vector<Tag> &tags = {});
     int selectedRow() const { return m_selectedRow; }
     QString selectedHash() const;
 

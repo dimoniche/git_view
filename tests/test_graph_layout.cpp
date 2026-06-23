@@ -1,4 +1,5 @@
 #include "core/GraphLayout.h"
+#include "core/Tag.h"
 
 #include <QtTest>
 
@@ -10,6 +11,7 @@ private slots:
     void mergeCommitUsesMultipleLanes();
     void branchTrunkIsStraightLine();
     void reusesSideLaneWhenBranchesDoNotOverlap();
+    void showsTagsOnTaggedCommits();
 };
 
 void TestGraphLayout::assignsLanesForLinearHistory()
@@ -101,6 +103,28 @@ void TestGraphLayout::reusesSideLaneWhenBranchesDoNotOverlap()
     const GraphLayout layout = GraphLayout::build(commits, QStringLiteral("merge_new"));
     QCOMPARE(layout.lanes[3], layout.lanes[5]);
     QCOMPARE(layout.laneCount, 2);
+}
+
+void TestGraphLayout::showsTagsOnTaggedCommits()
+{
+    std::vector<Commit> commits(2);
+    commits[0].hash = QStringLiteral("c2");
+    commits[0].parentHashes = {QStringLiteral("c1")};
+    commits[1].hash = QStringLiteral("c1");
+    commits[1].parentHashes = {};
+
+    std::vector<Tag> tags(2);
+    tags[0].name = QStringLiteral("v2.0");
+    tags[0].tipHash = QStringLiteral("c2");
+    tags[1].name = QStringLiteral("v1.0");
+    tags[1].tipHash = QStringLiteral("c1");
+
+    const GraphLayout layout = GraphLayout::build(commits, {}, {}, tags);
+    QCOMPARE(layout.rowLabels.size(), size_t(2));
+    QCOMPARE(layout.rowLabels[0].row, 0);
+    QCOMPARE(layout.rowLabels[0].name, QStringLiteral("v2.0"));
+    QCOMPARE(layout.rowLabels[1].row, 1);
+    QCOMPARE(layout.rowLabels[1].name, QStringLiteral("v1.0"));
 }
 
 QTEST_MAIN(TestGraphLayout)

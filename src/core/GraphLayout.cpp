@@ -339,19 +339,60 @@ GraphLayout buildGeneral(const std::vector<Commit> &commits)
     return layout;
 }
 
+void appendTagLabels(const std::vector<Commit> &commits,
+                     const std::vector<Tag> &tags,
+                     std::vector<GraphRowLabel> &rowLabels)
+{
+    if (tags.empty()) {
+        return;
+    }
+
+    QHash<QString, int> rowOf;
+    for (size_t row = 0; row < commits.size(); ++row) {
+        rowOf.insert(commits[row].hash, static_cast<int>(row));
+    }
+
+    QHash<int, QStringList> tagsByRow;
+    for (const Tag &tag : tags) {
+        const auto it = rowOf.constFind(tag.tipHash);
+        if (it != rowOf.constEnd()) {
+            tagsByRow[it.value()].append(tag.name);
+        }
+    }
+
+    for (auto it = tagsByRow.constBegin(); it != tagsByRow.constEnd(); ++it) {
+        QStringList sorted = it.value();
+        sorted.sort(Qt::CaseInsensitive);
+
+        GraphRowLabel label;
+        label.row = it.key();
+        label.name = sorted.join(QStringLiteral(", "));
+        label.kind = GraphRefKind::Tag;
+        rowLabels.push_back(std::move(label));
+    }
+
+    std::sort(rowLabels.begin(), rowLabels.end(),
+              [](const GraphRowLabel &a, const GraphRowLabel &b) { return a.row < b.row; });
+}
+
 } // namespace
 
 GraphLayout GraphLayout::build(const std::vector<Commit> &commits,
                                const QString &branchTipHash,
-                               const std::vector<Branch> &branches)
+                               const std::vector<Branch> &branches,
+                               const std::vector<Tag> &tags)
 {
     if (commits.empty()) {
         return {};
     }
 
+    GraphLayout layout;
     if (!branchTipHash.trimmed().isEmpty()) {
-        return buildForBranch(commits, branchTipHash.trimmed(), branches);
+        layout = buildForBranch(commits, branchTipHash.trimmed(), branches);
+    } else {
+        layout = buildGeneral(commits);
     }
 
-    return buildGeneral(commits);
+    appendTagLabels(commits, tags, layout.rowLabels);
+    return layout;
 }

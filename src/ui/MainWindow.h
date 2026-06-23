@@ -3,6 +3,7 @@
 #include "AppLaunchOptions.h"
 #include "core/Branch.h"
 #include "core/Repo.h"
+#include "core/Tag.h"
 
 #include <QPoint>
 #include "git/GitService.h"
@@ -54,6 +55,7 @@ private slots:
     void focusHistoryPanel();
     void commitChanges();
     void amendLastCommit();
+    void undoLastCommit();
     void discardAllChanges();
     void discardFileChanges(const QStringList &paths);
     void stageFileChanges(const QStringList &paths);
@@ -99,6 +101,7 @@ private:
     void updateWorkingTreeActions();
     void updateBranchActions();
     void updateRepoLabel();
+    void updateWindowTitle();
     void setStatusMessage(const QString &message);
     Branch branchAtRow(int row) const;
     Branch branchForActions() const;
@@ -119,6 +122,7 @@ private:
     GitService m_git;
     Repo m_repo;
     std::vector<Branch> m_branches;
+    std::vector<Tag> m_tags;
     QString m_branchFilter;
     int m_logLimit = 500;
 
@@ -150,6 +154,7 @@ private:
     QAction *m_toggleDetailsAction = nullptr;
     QAction *m_commitAction = nullptr;
     QAction *m_amendAction = nullptr;
+    QAction *m_undoCommitAction = nullptr;
     QAction *m_discardAllAction = nullptr;
     QAction *m_discardFileAction = nullptr;
     QAction *m_checkoutAction = nullptr;
