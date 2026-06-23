@@ -7,7 +7,9 @@ Build-Depends: debhelper-compat (= 13),
                g++,
                qt6-base-dev,
                git,
-               pkg-config
+               pkg-config,
+               python3,
+               python3-pil
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
 Homepage: https://github.com/example/git_view

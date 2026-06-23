@@ -36,7 +36,9 @@ set(GIT_VIEW_SOURCES
 
 include(GNUInstallDirs)
 
-add_executable(git_view ${GIT_VIEW_SOURCES})
+set(GIT_VIEW_RESOURCES ${CMAKE_SOURCE_DIR}/resources/git_view.qrc)
+
+add_executable(git_view ${GIT_VIEW_SOURCES} ${GIT_VIEW_RESOURCES})
 
 target_include_directories(git_view PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -60,7 +62,18 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_COPYRIGHT "Copyright © git_view contributors"
     )
+    set(_git_view_icon_png ${CMAKE_SOURCE_DIR}/resources/icons/git_view.png)
+    target_sources(git_view PRIVATE ${_git_view_icon_png})
+    set_source_files_properties(${_git_view_icon_png} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     install(TARGETS git_view BUNDLE DESTINATION .)
 else()
     install(TARGETS git_view RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES ${CMAKE_SOURCE_DIR}/resources/icons/git_view.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+            RENAME git_view.svg)
+    foreach(_icon_size 48 128 256 512)
+        install(FILES ${CMAKE_SOURCE_DIR}/resources/icons/git_view_${_icon_size}.png
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${_icon_size}x${_icon_size}/apps
+                RENAME git_view.png)
+    endforeach()
 endif()
