@@ -7,6 +7,7 @@ export DEB_LDFLAGS_MAINT_APPEND = -Wl,--as-needed
 	dh $@ --buildsystem=cmake
 
 override_dh_auto_configure:
+	python3 resources/icons/render_icon.py
 	dh_auto_configure -- \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DGIT_VIEW_BUILD_TESTS=OFF

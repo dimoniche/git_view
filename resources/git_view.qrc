@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file alias="icons/git_view.svg">icons/git_view.svg</file>
+        <file alias="icons/git_view.png">icons/git_view.png</file>
+    </qresource>
+</RCC>

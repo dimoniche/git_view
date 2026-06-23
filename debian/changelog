@@ -1,3 +1,27 @@
+git-view (0.1.3-1) unstable; urgency=medium
+
+  * Release 0.1.3.
+
+ -- git_view <git_view@localhost>  Tue, 23 Jun 2026 10:09:21 +0300
+
+git-view (0.1.2-4) unstable; urgency=medium
+
+  * Rebuild package.
+
+ -- git_view <git_view@localhost>  Fri, 19 Jun 2026 12:47:27 +0300
+
+git-view (0.1.2-3) unstable; urgency=medium
+
+  * Rebuild package.
+
+ -- git_view <git_view@localhost>  Fri, 19 Jun 2026 12:45:18 +0300
+
+git-view (0.1.2-2) unstable; urgency=medium
+
+  * Rebuild package.
+
+ -- git_view <git_view@localhost>  Fri, 19 Jun 2026 12:39:59 +0300
+
 git-view (0.1.2-1) unstable; urgency=medium
 
   * Release 0.1.2.

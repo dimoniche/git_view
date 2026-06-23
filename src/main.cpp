@@ -5,6 +5,8 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QGuiApplication>
+#include <QIcon>
 #include <QTimer>
 #include <QTextStream>
 
@@ -43,6 +45,15 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName(QStringLiteral("git_view"));
     QApplication::setOrganizationName(QStringLiteral("git_view"));
     QApplication::setApplicationVersion(QStringLiteral(GIT_VIEW_VERSION));
+
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+    QGuiApplication::setDesktopFileName(QStringLiteral("git_view"));
+#endif
+
+    const QIcon appIcon(QStringLiteral(":/icons/git_view.png"));
+    if (!appIcon.isNull()) {
+        QApplication::setWindowIcon(appIcon);
+    }
 
     GitService git;
     const AppLaunchOptions options = AppLaunchOptions::parse(QCoreApplication::arguments(), &git);
