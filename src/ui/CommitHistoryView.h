@@ -31,6 +31,7 @@ signals:
     void commitSelected(const QString &hash);
     void viewCommitDetailsRequested(const QString &hash);
     void createBranchFromCommitRequested(const QString &hash);
+    void checkoutCommitRequested(const QString &hash);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;

@@ -142,6 +142,11 @@ void MainWindow::setupUi()
     m_checkoutAction->setEnabled(false);
     connect(m_checkoutAction, &QAction::triggered, this, &MainWindow::checkoutSelectedBranch);
 
+    m_checkoutCommitAction = new QAction(tr("Checkout commit…"), this);
+    m_checkoutCommitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
+    m_checkoutCommitAction->setEnabled(false);
+    connect(m_checkoutCommitAction, &QAction::triggered, this, &MainWindow::checkoutSelectedCommit);
+
     auto *newBranchAction = new QAction(tr("New branch…"), this);
     newBranchAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
     connect(newBranchAction, &QAction::triggered, this, [this]() { createBranch(); });
@@ -167,6 +172,7 @@ void MainWindow::setupUi()
 
     auto *repoMenu = menuBar()->addMenu(tr("&Repository"));
     repoMenu->addAction(m_checkoutAction);
+    repoMenu->addAction(m_checkoutCommitAction);
     repoMenu->addAction(newBranchAction);
     repoMenu->addAction(configureRemotesAction);
     repoMenu->addAction(configureIdentityAction);
@@ -265,6 +271,8 @@ void MainWindow::setupUi()
             &MainWindow::focusCommitDetails);
     connect(m_historyView, &CommitHistoryView::createBranchFromCommitRequested, this,
             [this](const QString &hash) { createBranch(hash); });
+    connect(m_historyView, &CommitHistoryView::checkoutCommitRequested, this,
+            &MainWindow::checkoutCommit);
     historyLayout->addWidget(m_historyView, 1);
     auto *historyButtons = new QHBoxLayout();
     m_showAllCommitsButton = new QPushButton(tr("Show all commits"), historyColumn);
@@ -1861,6 +1869,12 @@ void MainWindow::updateBranchActions()
         m_checkoutAction->setEnabled(canCheckout);
     }
 
+    if (m_checkoutCommitAction) {
+        const bool canCheckoutCommit =
+            repoOpen && m_historyView && !m_historyView->selectedHash().isEmpty();
+        m_checkoutCommitAction->setEnabled(canCheckoutCommit);
+    }
+
     if (m_mergeButton) {
         const int row = m_branchList ? m_branchList->currentRow() : -1;
         m_mergeButton->setEnabled(repoOpen && row >= 0);
@@ -2346,6 +2360,9 @@ void MainWindow::filterLogToBranch(int row)
 void MainWindow::onCommitSelected(const QString &hash)
 {
     showCommitDetails(hash);
+    if (m_checkoutCommitAction) {
+        m_checkoutCommitAction->setEnabled(m_repo.isValid() && !hash.isEmpty());
+    }
 }
 
 void MainWindow::focusCommitDetails(const QString &hash)
@@ -2996,6 +3013,74 @@ void MainWindow::checkoutBranch(const Branch &branch)
         }
     }
     m_branchFilter = logFilter;
+    m_logLimit = kInitialLogLimit;
+    refreshRepository();
+}
+
+void MainWindow::checkoutSelectedCommit()
+{
+    if (!m_historyView) {
+        return;
+    }
+
+    const QString hash = m_historyView->selectedHash();
+    if (hash.isEmpty()) {
+        QMessageBox::information(this, tr("Checkout commit"), tr("Select a commit first."));
+        return;
+    }
+
+    checkoutCommit(hash);
+}
+
+void MainWindow::checkoutCommit(const QString &hash)
+{
+    if (!m_repo.isValid() || hash.trimmed().isEmpty()) {
+        return;
+    }
+
+    const QString shortHash = hash.left(8);
+    const QString head = m_git.headHash(m_repo.path());
+    if (!head.isEmpty() && (head == hash || head.startsWith(hash) || hash.startsWith(head))) {
+        const QString current = m_git.currentBranch(m_repo.path());
+        if (current == QLatin1String("HEAD")) {
+            QMessageBox::information(
+                this, tr("Checkout commit"),
+                tr("Already checked out at %1 (detached HEAD).").arg(shortHash));
+            return;
+        }
+    }
+
+    const auto answer = QMessageBox::question(
+        this, tr("Checkout commit"),
+        tr("Check out commit %1?\n\n"
+           "This puts the repository into a detached HEAD state. "
+           "Create a branch afterward if you want to keep new commits.")
+            .arg(shortHash),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    if (m_git.hasUncommittedChanges(m_repo.path())) {
+        const auto dirtyAnswer = QMessageBox::warning(
+            this, tr("Checkout commit"),
+            tr("The working tree has uncommitted changes. Check out %1 anyway?")
+                .arg(shortHash),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (dirtyAnswer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    const GitProcessResult result = m_git.checkoutCommit(m_repo.path(), hash);
+    if (!result.success()) {
+        QMessageBox::critical(
+            this, tr("Checkout failed"),
+            tr("%1\n\n%2").arg(m_git.lastError(), result.stderrText.trimmed()));
+        return;
+    }
+
+    m_branchFilter.clear();
     m_logLimit = kInitialLogLimit;
     refreshRepository();
 }

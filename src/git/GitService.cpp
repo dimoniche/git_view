@@ -935,6 +935,37 @@ GitProcessResult GitService::checkoutBranch(const QString &repoPath, const QStri
     return result;
 }
 
+GitProcessResult GitService::checkoutCommit(const QString &repoPath, const QString &hash) const
+{
+    m_lastError.clear();
+
+    const QString trimmed = hash.trimmed();
+    if (trimmed.isEmpty()) {
+        m_lastError = QStringLiteral("Commit hash is empty");
+        GitProcessResult result;
+        result.exitCode = 1;
+        return result;
+    }
+
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("checkout"), QStringLiteral("--detach"), trimmed});
+    if (!result.success()) {
+        setError(QStringLiteral("git checkout failed"), result);
+    }
+    return result;
+}
+
+QString GitService::headHash(const QString &repoPath) const
+{
+    const GitProcessResult result =
+        m_runner.run(repoPath, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    if (!result.success()) {
+        setError(QStringLiteral("git rev-parse HEAD failed"), result);
+        return {};
+    }
+    return result.stdoutText.trimmed();
+}
+
 GitProcessResult GitService::createBranchAndCheckout(const QString &repoPath,
                                                        const QString &name,
                                                        const QString &startPoint) const

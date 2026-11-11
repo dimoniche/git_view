@@ -64,6 +64,8 @@ private slots:
     void addPathToGitignore(const QString &path);
     void checkoutBranch(const Branch &branch);
     void checkoutSelectedBranch();
+    void checkoutSelectedCommit();
+    void checkoutCommit(const QString &hash);
     void deleteBranch(const Branch &branch);
     void publishBranch(const Branch &branch);
     void pushBranch(const Branch &branch);
@@ -158,6 +160,7 @@ private:
     QAction *m_discardAllAction = nullptr;
     QAction *m_discardFileAction = nullptr;
     QAction *m_checkoutAction = nullptr;
+    QAction *m_checkoutCommitAction = nullptr;
     QAction *m_publishBranchAction = nullptr;
     QAction *m_fetchAction = nullptr;
     QAction *m_pullAction = nullptr;

@@ -302,6 +302,9 @@ void CommitHistoryView::showCommitContextMenu(int row, const QPoint &globalPos)
     });
 
     menu.addSeparator();
+    menu.addAction(tr("Checkout this commit…"), this, [this, commit]() {
+        emit checkoutCommitRequested(commit.hash);
+    });
     menu.addAction(tr("Create branch from commit…"), this, [this, commit]() {
         emit createBranchFromCommitRequested(commit.hash);
     });

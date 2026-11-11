@@ -108,6 +108,8 @@ public:
                                   const QString &name,
                                   const QString &startPoint = {}) const;
     GitProcessResult checkoutBranch(const QString &repoPath, const QString &name) const;
+    GitProcessResult checkoutCommit(const QString &repoPath, const QString &hash) const;
+    QString headHash(const QString &repoPath) const;
     GitProcessResult createBranchAndCheckout(const QString &repoPath,
                                                const QString &name,
                                                const QString &startPoint = {}) const;
