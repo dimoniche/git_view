@@ -7,6 +7,14 @@ export DEB_LDFLAGS_MAINT_APPEND = -Wl,--as-needed
 	dh $@ --buildsystem=cmake
 
 override_dh_auto_configure:
+	# A leftover in-source CMakeCache.txt makes cmake write into the source tree
+	# instead of obj-*, and dh_auto_build then fails with "No makefile found".
+	rm -rf CMakeCache.txt CMakeFiles cmake_install.cmake CTestTestfile.cmake Makefile \
+		src/CMakeFiles src/cmake_install.cmake src/Makefile \
+		tests/CMakeFiles tests/cmake_install.cmake tests/Makefile tests/CTestTestfile.cmake \
+		integrations/CMakeFiles integrations/cmake_install.cmake integrations/Makefile \
+		third_party/libvterm/CMakeFiles third_party/libvterm/cmake_install.cmake \
+		third_party/libvterm/Makefile
 	python3 resources/icons/render_icon.py
 	dh_auto_configure -- \
 		-DCMAKE_BUILD_TYPE=Release \

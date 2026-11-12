@@ -4,6 +4,8 @@ cmake-build-*/
 *.autosave
 CMakeCache.txt
 CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
 Makefile
 compile_commands.json
 *.o
@@ -12,6 +14,9 @@ moc_*.cpp
 ui_*.h
 qrc_*.cpp
 .git_view_recent
+Testing/
+CMakeDoxyfile.in
+CMakeDoxygenDefaults.cmake
 
 # Debian package build artifacts
 debian/.debhelper/
@@ -34,3 +39,14 @@ dist/
 *.dmg
 
 .case-test
+generated
+*_autogen/
+git_view_autogen/
+
+# Leftover in-source test binaries (build into build/ instead)
+/tests/test_diff_parser
+/tests/test_git_staged_diff
+/tests/test_graph_layout
+/tests/test_live_staged
+/tests/test_log_parser
+/tests/test_status_parser

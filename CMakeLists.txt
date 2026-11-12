@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+    message(FATAL_ERROR
+        "In-source builds are not supported. Use an out-of-source build, e.g.:\n"
+        "  cmake -B build -DCMAKE_BUILD_TYPE=Debug\n"
+        "  cmake --build build\n"
+        "If CMakeCache.txt / CMakeFiles appeared in the source tree, remove them first.")
+endif()
+
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" GIT_VIEW_VERSION)
 string(STRIP "${GIT_VIEW_VERSION}" GIT_VIEW_VERSION)
 
