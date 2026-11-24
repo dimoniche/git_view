@@ -37,7 +37,7 @@ if(APPLE AND NOT DEFINED CMAKE_PREFIX_PATH)
     endforeach()
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 
 if(UNIX)
     add_subdirectory(third_party/libvterm)

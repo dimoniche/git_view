@@ -46,7 +46,7 @@ target_include_directories(git_view PRIVATE
     ${GIT_VIEW_GENERATED_DIR}
 )
 
-target_link_libraries(git_view PRIVATE Qt6::Widgets)
+target_link_libraries(git_view PRIVATE Qt6::Widgets Qt6::Concurrent)
 
 if(UNIX)
     target_link_libraries(git_view PRIVATE libvterm)

@@ -1,6 +1,7 @@
 #include "ui/MainWindow.h"
 
 #include "core/WorkingTreeChange.h"
+#include "ui/BusyOperation.h"
 #include "ui/CommitDetailsPanel.h"
 #include "ui/CommitDetailsDialog.h"
 #include "ui/FileHistoryDialog.h"
@@ -896,7 +897,9 @@ void MainWindow::commitChanges()
     }
 
     if (stageAllRadio->isChecked()) {
-        const GitProcessResult stageResult = m_git.stageAll(m_repo.path());
+        const GitProcessResult stageResult = BusyOperation::run(this, tr("Staging changes…"), [this]() {
+            return m_git.stageAll(m_repo.path());
+        });
         if (!stageResult.success()) {
             QMessageBox::critical(this, tr("Commit"), m_git.lastError());
             return;
@@ -906,7 +909,11 @@ void MainWindow::commitChanges()
         return;
     }
 
-    auto commitOnce = [&]() { return m_git.commit(m_repo.path(), message); };
+    auto commitOnce = [this, message]() {
+        return BusyOperation::run(this, tr("Creating commit…"), [this, message]() {
+            return m_git.commit(m_repo.path(), message);
+        });
+    };
 
     GitProcessResult commitResult = commitOnce();
     if (!commitResult.success() && GitService::isCommitIdentityError(commitResult)) {
@@ -1081,7 +1088,10 @@ void MainWindow::amendLastCommit()
 
     if (dirty) {
         if (stageAllRadio && stageAllRadio->isChecked()) {
-            const GitProcessResult stageResult = m_git.stageAll(m_repo.path());
+            const GitProcessResult stageResult =
+                BusyOperation::run(this, tr("Staging changes…"), [this]() {
+                    return m_git.stageAll(m_repo.path());
+                });
             if (!stageResult.success()) {
                 QMessageBox::critical(this, tr("Amend commit"), m_git.lastError());
                 return;
@@ -1099,7 +1109,11 @@ void MainWindow::amendLastCommit()
         return;
     }
 
-    auto amendOnce = [&]() { return m_git.amendCommit(m_repo.path(), message, keepMessage); };
+    auto amendOnce = [this, message, keepMessage]() {
+        return BusyOperation::run(this, tr("Amending commit…"), [this, message, keepMessage]() {
+            return m_git.amendCommit(m_repo.path(), message, keepMessage);
+        });
+    };
 
     GitProcessResult amendResult = amendOnce();
     if (!amendResult.success() && GitService::isCommitIdentityError(amendResult)) {
@@ -2202,9 +2216,14 @@ bool MainWindow::executePush(const Branch &branch, const QString &remote, bool s
         return false;
     }
 
-    auto runPush = [&]() -> GitProcessResult {
-        return setUpstream ? m_git.publishBranch(m_repo.path(), branch.name, remote)
-                           : m_git.pushBranch(m_repo.path(), branch.name, remote, forceWithLease);
+    const QString busyLabel =
+        forceWithLease ? tr("Force pushing…")
+                       : (setUpstream ? tr("Publishing branch…") : tr("Pushing…"));
+    auto runPush = [this, &branch, &remote, setUpstream, forceWithLease, busyLabel]() -> GitProcessResult {
+        return BusyOperation::run(this, busyLabel, [this, &branch, &remote, setUpstream, forceWithLease]() {
+            return setUpstream ? m_git.publishBranch(m_repo.path(), branch.name, remote)
+                               : m_git.pushBranch(m_repo.path(), branch.name, remote, forceWithLease);
+        });
     };
 
     GitProcessResult result = runPush();
@@ -2822,8 +2841,12 @@ void MainWindow::fetchRemotes()
         return;
     }
 
-    const GitProcessResult result =
-        fetchAll ? m_git.fetchAll(m_repo.path()) : m_git.fetchRemote(m_repo.path(), selection);
+    const GitProcessResult result = BusyOperation::run(
+        this, fetchAll ? tr("Fetching all remotes…") : tr("Fetching %1…").arg(selection),
+        [this, fetchAll, selection]() {
+            return fetchAll ? m_git.fetchAll(m_repo.path())
+                            : m_git.fetchRemote(m_repo.path(), selection);
+        });
     if (!result.success()) {
         QMessageBox::critical(
             this, tr("Fetch failed"),
@@ -2928,8 +2951,11 @@ void MainWindow::pullBranch(const Branch &branch)
         }
     }
 
-    const GitProcessResult result =
-        m_git.pullBranch(m_repo.path(), remote, remoteBranch);
+    const GitProcessResult result = BusyOperation::run(
+        this, tr("Pulling from %1/%2…").arg(remote, remoteBranch),
+        [this, remote, remoteBranch]() {
+            return m_git.pullBranch(m_repo.path(), remote, remoteBranch);
+        });
     if (!result.success()) {
         QMessageBox::critical(
             this, tr("Pull failed"),
